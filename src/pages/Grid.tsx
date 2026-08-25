@@ -66,7 +66,7 @@ export default function Grid() {
               p.completed ? 'border-emerald-400' : 'border-amber-300'
             }`}
           >
-            <img src={p.imageUrl} alt={p.originalFilename} loading="lazy" className="h-36 w-full object-cover" />
+            <img src={p.thumbUrl || p.imageUrl} alt={p.originalFilename} loading="lazy" className="h-36 w-full object-cover" />
             <div className="p-2">
               <p className="truncate text-xs text-slate-400">{p.originalFilename}</p>
               {p.completed ? (

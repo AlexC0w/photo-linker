@@ -10,7 +10,7 @@ dispositivo, abre un enlace público y captura los datos foto por foto.
 - **Frontend:** React 19 + Vite + TypeScript + Tailwind CSS 4 (componentes propios, estilo shadcn).
 - **Backend:** Node.js + Express.
 - **Base de datos:** SQLite (better-sqlite3) — un solo archivo, cero configuración.
-- **Imágenes:** disco del servidor (`DATA_DIR/uploads`), servidas por Express.
+- **Imágenes:** disco del servidor (`DATA_DIR/uploads`), con miniaturas generadas por `sharp`.
 - **Excel:** ExcelJS.
 
 Todo vive en un solo proyecto: `npm install && npm run dev`. No hay servicios externos ni costos.
@@ -60,7 +60,9 @@ npm start               # sirve API + frontend en http://localhost:3000
    - Cada guardado va directo a la base de datos: puede cerrar el navegador y continuar donde iba.
 5. Cuando termine, en `/admin` presiona **Descargar Excel**.
 
-El Excel incluye pendientes y completados, con columnas `Imagen | Código de barras | Stock | Estado`.
+El Excel incluye pendientes y completados, con columnas
+`Imagen | Código de barras | Stock | Estado | Archivo`. La columna **Imagen** lleva la fotografía
+embebida (miniatura de 200 px generada al subir, con `sharp`), y **Archivo** conserva el nombre original.
 El código de barras se guarda y exporta **siempre como texto**, así que conserva ceros iniciales y
 no se convierte a notación científica.
 

@@ -12,6 +12,7 @@ export type Product = {
   id: string;
   sessionId: string;
   imageUrl: string;
+  thumbUrl: string;
   originalFilename: string;
   barcode: string;
   stock: number | null;

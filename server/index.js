@@ -3,8 +3,22 @@ import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
 import ExcelJS from 'exceljs';
+import sharp from 'sharp';
 import { nanoid } from 'nanoid';
-import { db, DATA_DIR, UPLOAD_DIR } from './db.js';
+import { db, DATA_DIR, UPLOAD_DIR, THUMB_DIR } from './db.js';
+
+// Miniatura cuadrada: alimenta la vista de grid y la imagen embebida en el Excel.
+const THUMB_PX = 200;
+
+async function makeThumb(filename) {
+  const name = `${path.parse(filename).name}.jpg`;
+  await sharp(path.join(UPLOAD_DIR, filename))
+    .rotate()
+    .resize(THUMB_PX, THUMB_PX, { fit: 'contain', background: '#ffffff' })
+    .jpeg({ quality: 78 })
+    .toFile(path.join(THUMB_DIR, name));
+  return `/uploads/thumbs/${name}`;
+}
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PIN = process.env.ADMIN_PIN || '1234';
@@ -55,12 +69,27 @@ function withStats(session) {
 }
 
 const insertProduct = () => db.prepare(`
-  INSERT INTO products (id, sessionId, imageUrl, originalFilename, barcode, stock, completed, "order", createdAt, updatedAt)
-  VALUES (@id, @sessionId, @imageUrl, @originalFilename, '', NULL, 0, @order, @now, @now)
+  INSERT INTO products (id, sessionId, imageUrl, thumbUrl, originalFilename, barcode, stock, completed, "order", createdAt, updatedAt)
+  VALUES (@id, @sessionId, @imageUrl, @thumbUrl, @originalFilename, '', NULL, 0, @order, @now, @now)
 `);
 
 const sortFiles = (files) =>
   (files || []).sort((a, b) => a.originalname.localeCompare(b.originalname, 'es', { numeric: true }));
+
+// Genera las miniaturas antes de insertar; si alguna falla, el producto igual se guarda.
+async function prepareFiles(files) {
+  return Promise.all(
+    files.map(async (f) => {
+      let thumbUrl = '';
+      try {
+        thumbUrl = await makeThumb(f.filename);
+      } catch (err) {
+        console.error('No se pudo generar la miniatura de', f.originalname, err.message);
+      }
+      return { file: f, thumbUrl };
+    })
+  );
+}
 
 /* ---------- sessions ---------- */
 app.get('/api/sessions', requireAdmin, (req, res) => {
@@ -68,23 +97,24 @@ app.get('/api/sessions', requireAdmin, (req, res) => {
   res.json(rows.map(withStats));
 });
 
-app.post('/api/sessions', requireAdmin, upload.array('photos'), (req, res) => {
+app.post('/api/sessions', requireAdmin, upload.array('photos'), async (req, res) => {
   const name = (req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Falta el nombre de la sesión' });
 
   const id = nanoid(10);
   const now = new Date().toISOString();
   const stmt = insertProduct();
-  const files = sortFiles(req.files);
+  const prepared = await prepareFiles(sortFiles(req.files));
 
   db.transaction(() => {
     db.prepare('INSERT INTO sessions (id, name, createdAt) VALUES (?, ?, ?)').run(id, name, now);
-    files.forEach((f, i) => {
+    prepared.forEach(({ file, thumbUrl }, i) => {
       stmt.run({
         id: nanoid(12),
         sessionId: id,
-        imageUrl: `/uploads/${f.filename}`,
-        originalFilename: f.originalname,
+        imageUrl: `/uploads/${file.filename}`,
+        thumbUrl,
+        originalFilename: file.originalname,
         order: i,
         now,
       });
@@ -95,7 +125,7 @@ app.post('/api/sessions', requireAdmin, upload.array('photos'), (req, res) => {
 });
 
 // Agregar más fotos a una sesión existente
-app.post('/api/sessions/:id/photos', requireAdmin, upload.array('photos'), (req, res) => {
+app.post('/api/sessions/:id/photos', requireAdmin, upload.array('photos'), async (req, res) => {
   const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(req.params.id);
   if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
 
@@ -104,15 +134,16 @@ app.post('/api/sessions/:id/photos', requireAdmin, upload.array('photos'), (req,
     .prepare('SELECT COALESCE(MAX("order"), -1) + 1 AS next FROM products WHERE sessionId = ?')
     .get(session.id).next;
   const stmt = insertProduct();
-  const files = sortFiles(req.files);
+  const prepared = await prepareFiles(sortFiles(req.files));
 
   db.transaction(() => {
-    files.forEach((f, i) => {
+    prepared.forEach(({ file, thumbUrl }, i) => {
       stmt.run({
         id: nanoid(12),
         sessionId: session.id,
-        imageUrl: `/uploads/${f.filename}`,
-        originalFilename: f.originalname,
+        imageUrl: `/uploads/${file.filename}`,
+        thumbUrl,
+        originalFilename: file.originalname,
         order: start + i,
         now,
       });
@@ -134,13 +165,14 @@ app.get('/api/sessions/:id', (req, res) => {
 });
 
 app.delete('/api/sessions/:id', requireAdmin, (req, res) => {
-  const products = db.prepare('SELECT imageUrl FROM products WHERE sessionId = ?').all(req.params.id);
+  const products = db.prepare('SELECT imageUrl, thumbUrl FROM products WHERE sessionId = ?').all(req.params.id);
   db.transaction(() => {
     db.prepare('DELETE FROM products WHERE sessionId = ?').run(req.params.id);
     db.prepare('DELETE FROM sessions WHERE id = ?').run(req.params.id);
   })();
   for (const p of products) {
     fs.rm(path.join(UPLOAD_DIR, path.basename(p.imageUrl)), { force: true }, () => {});
+    if (p.thumbUrl) fs.rm(path.join(THUMB_DIR, path.basename(p.thumbUrl)), { force: true }, () => {});
   }
   res.json({ ok: true });
 });
@@ -179,26 +211,44 @@ app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
   if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
   const products = db.prepare('SELECT * FROM products WHERE sessionId = ? ORDER BY "order"').all(session.id);
 
+  const IMG_PX = 90; // lado de la miniatura dentro de la celda
+
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Productos');
   ws.columns = [
-    { header: 'Imagen', key: 'imagen', width: 40 },
+    { header: 'Imagen', key: 'imagen', width: 14 },
     { header: 'Código de barras', key: 'barcode', width: 26 },
     { header: 'Stock', key: 'stock', width: 10 },
     { header: 'Estado', key: 'estado', width: 14 },
+    { header: 'Archivo', key: 'archivo', width: 40 },
   ];
   ws.getRow(1).font = { bold: true };
 
   for (const p of products) {
     const row = ws.addRow({
-      imagen: p.originalFilename,
+      imagen: '',
       barcode: p.barcode || '',
       stock: p.stock ?? '',
       estado: p.completed ? 'Completado' : 'Pendiente',
+      archivo: p.originalFilename,
     });
+    row.height = IMG_PX * 0.75; // px → puntos
+    row.alignment = { vertical: 'middle' };
+
     // Formato texto explícito: evita notación científica y pérdida de ceros iniciales.
     row.getCell('barcode').numFmt = '@';
-    row.getCell('barcode').alignment = { horizontal: 'left' };
+    row.getCell('barcode').alignment = { horizontal: 'left', vertical: 'middle' };
+
+    // Miniatura embebida en la celda de la columna Imagen.
+    const thumb = p.thumbUrl && path.join(THUMB_DIR, path.basename(p.thumbUrl));
+    if (thumb && fs.existsSync(thumb)) {
+      const imageId = wb.addImage({ filename: thumb, extension: 'jpeg' });
+      ws.addImage(imageId, {
+        tl: { col: 0.1, row: row.number - 1 + 0.05 },
+        ext: { width: IMG_PX, height: IMG_PX },
+        editAs: 'oneCell',
+      });
+    }
   }
   ws.getColumn('barcode').numFmt = '@';
 
@@ -227,4 +277,23 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Error interno' });
 });
 
-app.listen(PORT, () => console.log(`Photo Linker en http://localhost:${PORT} (datos: ${DATA_DIR})`));
+// Al arrancar, genera las miniaturas que falten (sesiones creadas antes de esta función).
+async function backfillThumbs() {
+  const pending = db.prepare("SELECT id, imageUrl FROM products WHERE thumbUrl = ''").all();
+  if (!pending.length) return;
+  console.log(`Generando ${pending.length} miniaturas faltantes…`);
+  const update = db.prepare('UPDATE products SET thumbUrl = ? WHERE id = ?');
+  for (const p of pending) {
+    try {
+      update.run(await makeThumb(path.basename(p.imageUrl)), p.id);
+    } catch (err) {
+      console.error('Miniatura fallida para', p.imageUrl, err.message);
+    }
+  }
+  console.log('Miniaturas listas.');
+}
+
+app.listen(PORT, () => {
+  console.log(`Photo Linker en http://localhost:${PORT} (datos: ${DATA_DIR})`);
+  backfillThumbs();
+});

@@ -32,3 +32,12 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_products_session ON products(sessionId, "order");
 `);
+
+// Migración: miniatura por producto (grid rápido + imagen embebida en el Excel).
+const columns = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
+if (!columns.includes('thumbUrl')) {
+  db.exec(`ALTER TABLE products ADD COLUMN thumbUrl TEXT NOT NULL DEFAULT ''`);
+}
+
+export const THUMB_DIR = path.join(UPLOAD_DIR, 'thumbs');
+fs.mkdirSync(THUMB_DIR, { recursive: true });
