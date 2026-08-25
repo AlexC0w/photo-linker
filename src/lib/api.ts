@@ -1,6 +1,9 @@
 export type Session = {
   id: string;
   name: string;
+  sizeRun: string;
+  sizes: string[];
+  groupSize: number;
   createdAt: string;
   total: number;
   completed: number;
@@ -8,17 +11,36 @@ export type Session = {
   percent: number;
 };
 
-export type Product = {
+export type Photo = {
   id: string;
-  sessionId: string;
+  articleId: string;
   imageUrl: string;
   thumbUrl: string;
   originalFilename: string;
-  barcode: string;
-  stock: number | null;
-  completed: boolean;
+  isCover: number;
   order: number;
 };
+
+export type Variant = {
+  id?: string;
+  size: string;
+  barcode: string;
+  stock: number | null;
+};
+
+export type Article = {
+  id: string;
+  order: number;
+  photos: Photo[];
+  coverId: string | null;
+  coverUrl: string;
+  coverThumbUrl: string;
+  variants: Variant[];
+  completed: boolean;
+};
+
+// Fila de captura en pantalla (el stock se edita como texto para permitir vacío).
+export type VariantDraft = { size: string; barcode: string; stock: string };
 
 const PIN_KEY = 'photolinker.pin';
 
@@ -36,6 +58,10 @@ async function handle<T>(promise: Promise<Response>): Promise<T> {
 }
 
 const adminHeaders = () => ({ 'x-admin-pin': getPin() });
+const json = (body: unknown) => ({
+  headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+  body: JSON.stringify(body),
+});
 
 export const api = {
   login: (pin: string) =>
@@ -49,8 +75,10 @@ export const api = {
 
   listSessions: () => handle<Session[]>(fetch('/api/sessions', { headers: adminHeaders() })),
 
-  createSession: (name: string, files: File[], onProgress?: (pct: number) => void) =>
-    uploadWithProgress('/api/sessions', { name, files, onProgress }),
+  createSession: (
+    opts: { name: string; sizes: string; groupSize: number; files: File[] },
+    onProgress?: (pct: number) => void
+  ) => uploadWithProgress('/api/sessions', { ...opts, onProgress }),
 
   addPhotos: (sessionId: string, files: File[], onProgress?: (pct: number) => void) =>
     uploadWithProgress(`/api/sessions/${sessionId}/photos`, { files, onProgress }),
@@ -58,16 +86,24 @@ export const api = {
   deleteSession: (id: string) =>
     handle<{ ok: true }>(fetch(`/api/sessions/${id}`, { method: 'DELETE', headers: adminHeaders() })),
 
-  getSession: (id: string) => handle<{ session: Session; products: Product[] }>(fetch(`/api/sessions/${id}`)),
+  getSession: (id: string) => handle<{ session: Session; articles: Article[] }>(fetch(`/api/sessions/${id}`)),
 
-  saveProduct: (id: string, barcode: string, stock: string) =>
-    handle<{ product: Product; stats: Session }>(
-      fetch(`/api/products/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ barcode, stock }),
-      })
+  saveVariants: (articleId: string, variants: VariantDraft[]) =>
+    handle<{ article: Article; stats: Session }>(
+      fetch(`/api/articles/${articleId}/variants`, { method: 'PUT', ...json({ variants }) })
     ),
+
+  splitArticle: (articleId: string, photoId: string) =>
+    handle<{ ok: true }>(fetch(`/api/articles/${articleId}/split`, { method: 'POST', ...json({ photoId }) })),
+
+  mergePrevious: (articleId: string) =>
+    handle<{ ok: true }>(fetch(`/api/articles/${articleId}/merge-previous`, { method: 'POST', ...json({}) })),
+
+  regroup: (sessionId: string, groupSize: number) =>
+    handle<Session>(fetch(`/api/sessions/${sessionId}/regroup`, { method: 'POST', ...json({ groupSize }) })),
+
+  setCover: (photoId: string) =>
+    handle<{ article: Article }>(fetch(`/api/photos/${photoId}/cover`, { method: 'POST', ...json({}) })),
 
   exportUrl: (id: string) => `/api/sessions/${id}/export.xlsx?pin=${encodeURIComponent(getPin())}`,
 };
@@ -75,11 +111,13 @@ export const api = {
 // XHR para poder mostrar progreso real al subir 100+ fotos.
 function uploadWithProgress(
   url: string,
-  opts: { name?: string; files: File[]; onProgress?: (pct: number) => void }
+  opts: { name?: string; sizes?: string; groupSize?: number; files: File[]; onProgress?: (pct: number) => void }
 ): Promise<Session> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     if (opts.name !== undefined) form.append('name', opts.name);
+    if (opts.sizes !== undefined) form.append('sizes', opts.sizes);
+    if (opts.groupSize !== undefined) form.append('groupSize', String(opts.groupSize));
     opts.files.forEach((f) => form.append('photos', f));
 
     const xhr = new XMLHttpRequest();
@@ -100,4 +138,23 @@ function uploadWithProgress(
     xhr.onerror = () => reject(new Error('Fallo de red al subir las imágenes'));
     xhr.send(form);
   });
+}
+
+// Combina la corrida de tallas de la sesión con lo ya capturado en el artículo.
+export function buildDraft(article: Article, sizes: string[]): VariantDraft[] {
+  const captured = article.variants.map((v) => ({
+    size: v.size,
+    barcode: v.barcode,
+    stock: v.stock === null ? '' : String(v.stock),
+  }));
+  const missing = sizes
+    .filter((s) => !captured.some((c) => c.size === s))
+    .map((s) => ({ size: s, barcode: '', stock: '' }));
+
+  const rank = (size: string) => {
+    const i = sizes.indexOf(size);
+    return i === -1 ? sizes.length : i; // tallas fuera de la corrida, al final
+  };
+  const rows = [...captured, ...missing].sort((a, b) => rank(a.size) - rank(b.size));
+  return rows.length ? rows : [{ size: '', barcode: '', stock: '' }];
 }

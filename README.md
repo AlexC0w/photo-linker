@@ -2,8 +2,21 @@
 
 Herramienta interna para capturar **código de barras** y **stock** a partir de fotografías de productos.
 
-Una persona sube las fotos desde el panel de administrador; otra persona, desde cualquier
-dispositivo, abre un enlace público y captura los datos foto por foto.
+Una persona sube todas las fotos de golpe desde el panel de administrador; la app las agrupa en
+artículos (varias fotos del mismo modelo, una es la portada) y otra persona, desde cualquier
+dispositivo, abre un enlace público y captura **una fila por talla**: talla, código de barras y stock.
+
+## Modelo
+
+```
+session  ─ corrida de tallas + fotos por artículo
+  └ article  ─ grupo contiguo de fotos, una es la portada
+      ├ photo   ─ archivo original + miniatura
+      └ variant ─ talla + código de barras (string) + stock
+```
+
+Los artículos son **grupos contiguos** de fotos en el orden en que se dispararon: por eso agrupar de
+N en N funciona, y corregir un corte es solo separar o unir.
 
 ## Stack
 
@@ -48,21 +61,31 @@ npm start               # sirve API + frontend en http://localhost:3000
 | `/`                         | Pantalla inicial (el punto discreto abajo lleva a `/admin`).   |
 | `/admin`                    | Panel: crear sesiones, subir fotos, progreso, Excel, eliminar. |
 | `/session/:sessionId`       | Captura pública (sin login). Abre el primer producto pendiente.|
-| `/session/:sessionId/grid`  | Miniaturas de todos los productos con su estado.               |
+| `/session/:sessionId/grid`  | Miniaturas de todos los artículos con su estado.               |
+| `/session/:sessionId/agrupar` | Ajustar la agrupación: separar, unir y elegir portada.       |
 
 ## Flujo
 
 1. Entra a `/admin` y pon el PIN.
-2. Crea una sesión ("Botas RML agosto") y selecciona las 100 fotos de una sola vez.
-3. Presiona **Copiar enlace** y mándaselo al empleado.
-4. El empleado abre el enlace: ve una foto grande, escribe código de barras + stock y presiona **Enter**.
-   - `Enter` = guardar y siguiente · `←` `→` = navegar · **Saltar** = dejarlo pendiente.
+2. Crea una sesión ("Botas RML agosto"), escribe la **corrida de tallas** (`25,26,27,28`), di cuántas
+   **fotos por artículo** disparas (ej. 4) y selecciona las 100 fotos de una sola vez.
+3. La app arma los artículos por orden de disparo. Si algún corte salió mal, entra a **Agrupar** y
+   usa *separar aquí* / *unir con el anterior*, o elige otra portada.
+4. Presiona **Copiar enlace** y mándaselo al empleado.
+5. El empleado abre el enlace: ve la portada grande (con las demás fotos como miniaturas) y una
+   tabla con la corrida de tallas ya prellenada. Solo escribe código y stock.
+   - `Enter` salta de código a stock, de fila a fila, y en la última fila guarda y pasa al siguiente
+     artículo · `Ctrl+Enter` guarda de inmediato · `←` `→` navegan · **Saltar** lo deja pendiente.
+   - Las filas que deje vacías no se guardan ni se exportan.
    - Cada guardado va directo a la base de datos: puede cerrar el navegador y continuar donde iba.
-5. Cuando termine, en `/admin` presiona **Descargar Excel**.
+6. Cuando termine, en `/admin` presiona **Descargar Excel**.
 
-El Excel incluye pendientes y completados, con columnas
-`Imagen | Código de barras | Stock | Estado | Archivo`. La columna **Imagen** lleva la fotografía
-embebida (miniatura de 200 px generada al subir, con `sharp`), y **Archivo** conserva el nombre original.
+Un artículo cuenta como completado cuando tiene al menos una talla con código y stock.
+
+El Excel lleva **una fila por talla** e incluye pendientes y completados, con columnas
+`Imagen | Artículo | Talla | Código de barras | Stock | Estado | Archivo`. La foto de portada va
+embebida (miniatura de 200 px generada al subir con `sharp`) y su celda se combina a lo alto de las
+tallas del artículo. Un artículo sin capturar sale igual, en una fila vacía marcada como pendiente.
 El código de barras se guarda y exporta **siempre como texto**, así que conserva ceros iniciales y
 no se convierte a notación científica.
 
@@ -73,10 +96,14 @@ no se convierte a notación científica.
 | `POST`   | `/api/admin/login`                   | —     | Valida el PIN.                        |
 | `GET`    | `/api/sessions`                      | sí    | Lista sesiones con progreso.          |
 | `POST`   | `/api/sessions`                      | sí    | Crea sesión (multipart: `name`, `photos[]`). |
-| `POST`   | `/api/sessions/:id/photos`           | sí    | Agrega más fotos a una sesión.        |
-| `GET`    | `/api/sessions/:id`                  | no    | Sesión + productos (capturista).      |
-| `DELETE` | `/api/sessions/:id`                  | sí    | Elimina sesión y sus imágenes.        |
-| `PATCH`  | `/api/products/:id`                  | no    | Guarda `barcode` (string) y `stock`.  |
+| `POST`   | `/api/sessions/:id/photos`           | sí    | Agrega más fotos (se agrupan al final).|
+| `GET`    | `/api/sessions/:id`                  | no    | Sesión + artículos (capturista).      |
+| `DELETE` | `/api/sessions/:id`                  | sí    | Elimina sesión, fotos y tallas.       |
+| `PUT`    | `/api/articles/:id/variants`         | no    | Reemplaza las tallas del artículo.    |
+| `POST`   | `/api/articles/:id/split`            | sí    | Separa el artículo a partir de una foto.|
+| `POST`   | `/api/articles/:id/merge-previous`   | sí    | Une el artículo con el anterior.      |
+| `POST`   | `/api/sessions/:id/regroup`          | sí    | Reagrupa toda la sesión de N en N.    |
+| `POST`   | `/api/photos/:id/cover`              | no    | Marca esa foto como portada.          |
 | `GET`    | `/api/sessions/:id/export.xlsx`      | sí    | Excel de la sesión.                   |
 
 El PIN va en el header `x-admin-pin` (o `?pin=` para la descarga del Excel).

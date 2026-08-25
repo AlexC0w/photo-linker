@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import Admin from './pages/Admin';
 import Capture from './pages/Capture';
 import Grid from './pages/Grid';
+import Group from './pages/Group';
 import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -15,6 +16,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <Route path="/admin" element={<Admin />} />
         <Route path="/session/:sessionId" element={<Capture />} />
         <Route path="/session/:sessionId/grid" element={<Grid />} />
+        <Route path="/session/:sessionId/agrupar" element={<Group />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

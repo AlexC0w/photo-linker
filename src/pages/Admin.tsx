@@ -64,6 +64,8 @@ export default function Admin() {
 function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [name, setName] = useState('');
+  const [sizes, setSizes] = useState('');
+  const [groupSize, setGroupSize] = useState('4');
   const [files, setFiles] = useState<File[]>([]);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
@@ -80,7 +82,10 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     if (!files.length) return setError('Selecciona al menos una fotografía');
     setProgress(0);
     try {
-      await api.createSession(name.trim(), files, setProgress);
+      await api.createSession(
+        { name: name.trim(), sizes, groupSize: Number.parseInt(groupSize, 10) || 1, files },
+        setProgress
+      );
       setName('');
       setFiles([]);
       if (fileRef.current) fileRef.current.value = '';
@@ -93,7 +98,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   }
 
   async function remove(s: Session) {
-    if (!confirm(`¿Eliminar la sesión "${s.name}" y sus ${s.total} fotos? No se puede deshacer.`)) return;
+    if (!confirm(`¿Eliminar la sesión "${s.name}" con sus ${s.total} artículos y sus fotos? No se puede deshacer.`)) return;
     await api.deleteSession(s.id);
     load();
   }
@@ -125,6 +130,33 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm font-medium">Corrida de tallas</label>
+              <Input
+                className="h-12"
+                placeholder="25,26,27,28,29,30"
+                value={sizes}
+                onChange={(e) => setSizes(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Se prellenan en cada artículo. Déjalo vacío si cada modelo trae tallas distintas.
+              </p>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Fotos por artículo</label>
+              <Input
+                className="h-12"
+                type="number"
+                min={1}
+                value={groupSize}
+                onChange={(e) => setGroupSize(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Las fotos se agrupan en ese orden; los cortes se corrigen luego en Agrupar.
+              </p>
+            </div>
+          </div>
           <input
             ref={fileRef}
             type="file"
@@ -134,7 +166,9 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             className="block w-full cursor-pointer rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-white"
           />
           {files.length > 0 && (
-            <p className="text-sm text-slate-500">{files.length} fotografías seleccionadas</p>
+            <p className="text-sm text-slate-500">
+              {files.length} fotografías · ~{Math.ceil(files.length / (Number.parseInt(groupSize, 10) || 1))} artículos
+            </p>
           )}
           {progress !== null && (
             <div className="space-y-1">
@@ -160,11 +194,12 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                   {new Date(s.createdAt).toLocaleDateString('es-MX', {
                     day: 'numeric', month: 'long', year: 'numeric',
                   })}
+                  {s.sizes.length > 0 && ` · tallas ${s.sizes.join(', ')}`}
                 </p>
               </div>
               <div className="text-right">
                 <p className="text-lg font-semibold">{s.completed} / {s.total}</p>
-                <p className="text-sm text-slate-500">{s.pending} pendientes · {s.percent}%</p>
+                <p className="text-sm text-slate-500">artículos · {s.percent}%</p>
               </div>
             </div>
 
@@ -172,7 +207,8 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
             <div className="flex flex-wrap gap-2">
               <Link to={`/session/${s.id}`}><Button variant="secondary">Abrir captura</Button></Link>
-              <Link to={`/session/${s.id}/grid`}><Button variant="secondary">Ver productos</Button></Link>
+              <Link to={`/session/${s.id}/grid`}><Button variant="secondary">Ver artículos</Button></Link>
+              <Link to={`/session/${s.id}/agrupar`}><Button variant="secondary">Agrupar</Button></Link>
               <Button variant="secondary" onClick={() => copyLink(s)}>
                 {copied === s.id ? '¡Enlace copiado!' : 'Copiar enlace'}
               </Button>

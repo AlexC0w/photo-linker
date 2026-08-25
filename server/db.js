@@ -4,40 +4,94 @@ import Database from 'better-sqlite3';
 
 export const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+export const THUMB_DIR = path.join(UPLOAD_DIR, 'thumbs');
 
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(THUMB_DIR, { recursive: true });
 
 export const db = new Database(path.join(DATA_DIR, 'app.db'));
 db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
+/*
+  Modelo:
+    session  → corrida de tallas + fotos por artículo
+    photo    → una fotografía del dump, pertenece a un artículo (grupo contiguo)
+    article  → un modelo: varias fotos (una es portada) + varias tallas
+    variant  → una talla del artículo: código de barras (string) + stock
+*/
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    sizeRun TEXT NOT NULL DEFAULT '',
+    groupSize INTEGER NOT NULL DEFAULT 1,
     createdAt TEXT NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS products (
+  CREATE TABLE IF NOT EXISTS articles (
     id TEXT PRIMARY KEY,
     sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    imageUrl TEXT NOT NULL,
-    originalFilename TEXT NOT NULL,
-    barcode TEXT NOT NULL DEFAULT '',
-    stock INTEGER,
-    completed INTEGER NOT NULL DEFAULT 0,
     "order" INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
   );
 
-  CREATE INDEX IF NOT EXISTS idx_products_session ON products(sessionId, "order");
+  CREATE TABLE IF NOT EXISTS photos (
+    id TEXT PRIMARY KEY,
+    sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    articleId TEXT REFERENCES articles(id) ON DELETE CASCADE,
+    imageUrl TEXT NOT NULL,
+    thumbUrl TEXT NOT NULL DEFAULT '',
+    originalFilename TEXT NOT NULL,
+    isCover INTEGER NOT NULL DEFAULT 0,
+    "order" INTEGER NOT NULL DEFAULT 0,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS variants (
+    id TEXT PRIMARY KEY,
+    articleId TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    size TEXT NOT NULL DEFAULT '',
+    barcode TEXT NOT NULL DEFAULT '',
+    stock INTEGER,
+    "order" INTEGER NOT NULL DEFAULT 0,
+    updatedAt TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_articles_session ON articles(sessionId, "order");
+  CREATE INDEX IF NOT EXISTS idx_photos_article ON photos(articleId, "order");
+  CREATE INDEX IF NOT EXISTS idx_photos_session ON photos(sessionId, "order");
+  CREATE INDEX IF NOT EXISTS idx_variants_article ON variants(articleId, "order");
 `);
 
-// Migración: miniatura por producto (grid rápido + imagen embebida en el Excel).
-const columns = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
-if (!columns.includes('thumbUrl')) {
-  db.exec(`ALTER TABLE products ADD COLUMN thumbUrl TEXT NOT NULL DEFAULT ''`);
-}
+/* Migración del modelo viejo (1 foto = 1 producto) al nuevo (artículo con tallas). */
+const hasLegacy = db
+  .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'products'")
+  .get();
 
-export const THUMB_DIR = path.join(UPLOAD_DIR, 'thumbs');
-fs.mkdirSync(THUMB_DIR, { recursive: true });
+if (hasLegacy) {
+  const legacy = db.prepare('SELECT * FROM products ORDER BY sessionId, "order"').all();
+  const insertArticle = db.prepare(
+    'INSERT INTO articles (id, sessionId, "order", createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)'
+  );
+  const insertPhoto = db.prepare(`
+    INSERT INTO photos (id, sessionId, articleId, imageUrl, thumbUrl, originalFilename, isCover, "order", createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `);
+  const insertVariant = db.prepare(
+    'INSERT INTO variants (id, articleId, size, barcode, stock, "order", updatedAt) VALUES (?, ?, \'\', ?, ?, 0, ?)'
+  );
+
+  db.transaction(() => {
+    for (const p of legacy) {
+      const articleId = `a_${p.id}`;
+      insertArticle.run(articleId, p.sessionId, p.order, p.createdAt, p.updatedAt);
+      insertPhoto.run(p.id, p.sessionId, articleId, p.imageUrl, p.thumbUrl || '', p.originalFilename, p.order, p.createdAt);
+      if (p.barcode || p.stock !== null) {
+        insertVariant.run(`v_${p.id}`, articleId, p.barcode || '', p.stock, p.updatedAt);
+      }
+    }
+    db.exec('DROP TABLE products');
+  })();
+  console.log(`Migrados ${legacy.length} productos al modelo de artículos con tallas.`);
+}
