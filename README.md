@@ -123,7 +123,16 @@ En la captura hay un botón **Escanear con la cámara**. Funciona en Android y e
   gzip, solo para quien abre el lector).
 
 Lee EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39 e ITF. Al leer, vibra, cierra la cámara, busca
-las tallas y deja el cursor en el primer stock.
+las tallas y deja el cursor en el primer stock. La barra de arriba muestra qué motor está activo y
+cuántos cuadros lleva analizados, para saber si el lector está trabajando o atorado.
+
+Si el video en vivo no engancha el código, el botón **tomar foto del código** usa la cámara nativa
+del teléfono (con su enfoque y resolución completa) y decodifica esa imagen. Es el camino más
+confiable en teléfonos lentos.
+
+Ojo con ZXing: cualquiera de sus `decodeFrom*` llama a `reset()`, que apaga el stream y limpia el
+`srcObject`. Por eso ZXing abre la cámara él mismo con `decodeFromConstraints` y no se le pasa un
+video que ya tenga stream — hacerlo dejaba la cámara encendida sin detectar nada.
 
 **Requiere HTTPS.** La cámara no abre por IP ni por http — en el celular hay que entrar por el
 dominio con certificado. En `localhost` sí funciona para probar.
