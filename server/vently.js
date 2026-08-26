@@ -156,7 +156,9 @@ export async function pushArticle(store, article, { mode, sessionName, uploadDir
       notes.push(`la talla "${row.size}" no existe en el catálogo de la tienda`);
       continue;
     }
-    const variant = variants.find((v) => v.size_id === size.size_id && v.color_id === colorId);
+    // OJO: /sizes devuelve la talla como `id`; el resto de la API la llama `size_id`.
+    const sizeId = size.id ?? size.size_id;
+    const variant = variants.find((v) => v.size_id === sizeId && v.color_id === colorId);
     if (!variant) {
       notes.push(`el producto no tiene la talla ${row.size} en ese color`);
       continue;
