@@ -6,11 +6,16 @@ import ExcelJS from 'exceljs';
 import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { db, DATA_DIR, UPLOAD_DIR, THUMB_DIR } from './db.js';
-import { findStore, lookupByCode, publicStores, pushArticle } from './vently.js';
+import { findStore, lookupByCode, publicStores } from './vently.js';
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PIN = process.env.ADMIN_PIN || '1234';
 const THUMB_PX = 200; // miniatura: alimenta el grid y la imagen embebida en el Excel
+
+// sharp por defecto usa un hilo por núcleo y cachea; en un contenedor con poca RAM
+// eso es lo que termina matando al proceso durante una subida grande.
+sharp.cache(false);
+sharp.concurrency(1);
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -53,19 +58,33 @@ async function makeThumb(filename) {
 const sortFiles = (files) =>
   (files || []).sort((a, b) => a.originalname.localeCompare(b.originalname, 'es', { numeric: true }));
 
-// Genera las miniaturas antes de insertar; si alguna falla, la foto igual se guarda.
+/*
+  Genera las miniaturas antes de insertar; si alguna falla, la foto igual se guarda.
+
+  De a pocas a la vez: con 280 fotos, lanzar todas las conversiones juntas revienta la
+  memoria del proceso (cada sharp abre el JPEG completo) y el servidor se cae a media
+  subida, que es cuando el navegador ve "Respuesta inválida del servidor".
+*/
+const THUMB_CONCURRENCY = 4;
+
 async function prepareFiles(files) {
-  return Promise.all(
-    files.map(async (f) => {
-      let thumbUrl = '';
-      try {
-        thumbUrl = await makeThumb(f.filename);
-      } catch (err) {
-        console.error('No se pudo generar la miniatura de', f.originalname, err.message);
-      }
-      return { file: f, thumbUrl };
-    })
-  );
+  const out = [];
+  for (let i = 0; i < files.length; i += THUMB_CONCURRENCY) {
+    const lote = files.slice(i, i + THUMB_CONCURRENCY);
+    const hechas = await Promise.all(
+      lote.map(async (f) => {
+        let thumbUrl = '';
+        try {
+          thumbUrl = await makeThumb(f.filename);
+        } catch (err) {
+          console.error('No se pudo generar la miniatura de', f.originalname, err.message);
+        }
+        return { file: f, thumbUrl };
+      })
+    );
+    out.push(...hechas);
+  }
+  return out;
 }
 
 /* ---------- consultas ---------- */
@@ -92,14 +111,10 @@ const parseSizes = (raw) =>
 
 function withStats(session) {
   const { total, completed } = q.stats.get({ id: session.id });
-  const sent = db
-    .prepare("SELECT COUNT(*) AS n FROM articles WHERE sessionId = ? AND ventlyStatus = 'enviado'")
-    .get(session.id).n;
   return {
     ...session,
     sizes: parseSizes(session.sizeRun),
     storeName: findStore(session.storeId)?.name || '',
-    sent,
     total,
     completed,
     pending: total - completed,
@@ -116,8 +131,6 @@ function loadArticle(row) {
     order: row.order,
     barcode: row.barcode,
     productName: row.productName,
-    ventlyStatus: row.ventlyStatus,
-    ventlyMessage: row.ventlyMessage,
     photos,
     coverId: cover?.id ?? null,
     coverUrl: cover?.imageUrl ?? '',
@@ -205,6 +218,18 @@ app.post('/api/sessions/:id/photos', requireAdmin, upload.array('photos'), async
   res.json(withStats(q.session.get(session.id)));
 });
 
+// Ligar (o desligar) una sesión ya creada a una tienda, para poder buscar tallas por código.
+app.patch('/api/sessions/:id', requireAdmin, (req, res) => {
+  const session = q.session.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+  const storeId = String(req.body.storeId ?? '').trim();
+  if (storeId && !findStore(storeId)) return res.status(400).json({ error: 'Esa tienda no está configurada' });
+
+  db.prepare('UPDATE sessions SET storeId = ? WHERE id = ?').run(storeId, session.id);
+  res.json(withStats(q.session.get(session.id)));
+});
+
 // Público: sesión completa (la usa el capturista)
 app.get('/api/sessions/:id', (req, res) => {
   const session = q.session.get(req.params.id);
@@ -260,11 +285,12 @@ app.put('/api/articles/:id/variants', (req, res) => {
   db.transaction(() => {
     db.prepare('DELETE FROM variants WHERE articleId = ?').run(article.id);
     clean.forEach((v, i) => insert.run(nanoid(12), article.id, v.size, v.stock, i, now));
-    // Si ya se había enviado y cambian los datos, vuelve a quedar por enviar.
-    const status = article.ventlyStatus === 'enviado' ? 'reenviar' : article.ventlyStatus;
-    db.prepare(
-      'UPDATE articles SET barcode = ?, productName = ?, ventlyStatus = ?, updatedAt = ? WHERE id = ?'
-    ).run(barcode, productName, status, now, article.id);
+    db.prepare('UPDATE articles SET barcode = ?, productName = ?, updatedAt = ? WHERE id = ?').run(
+      barcode,
+      productName,
+      now,
+      article.id
+    );
   })();
 
   res.json({
@@ -449,59 +475,6 @@ app.get('/api/sessions/:id/lookup', async (req, res) => {
   }
 });
 
-/*
-  Envía a Vently los artículos completados que aún no se han enviado.
-  mode: 'entry' suma el stock como entrada de mercancía; 'absolute' lo fija como stock final.
-*/
-app.post('/api/sessions/:id/push', requireAdmin, async (req, res) => {
-  const session = q.session.get(req.params.id);
-  if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
-
-  const store = findStore(session.storeId);
-  if (!store) return res.status(400).json({ error: 'Esta sesión no tiene una tienda de Vently asignada' });
-
-  const mode = req.body?.mode;
-  if (mode !== 'entry' && mode !== 'absolute') {
-    return res.status(400).json({ error: 'Elige si el stock se suma como entrada o se fija como stock final' });
-  }
-
-  const articles = q.articles.all(session.id).map(loadArticle);
-  // Solo los completados y no enviados: reenviar duplicaría entradas de stock.
-  const target = articles.filter((a) => a.completed && a.ventlyStatus !== 'enviado');
-  const update = db.prepare(
-    'UPDATE articles SET ventlyStatus = ?, ventlyMessage = ?, ventlyProductId = ?, ventlySentAt = ? WHERE id = ?'
-  );
-
-  const detalles = [];
-  let enviados = 0;
-  let errores = 0;
-
-  for (const article of target) {
-    try {
-      const { productId, notes } = await pushArticle(store, article, {
-        mode,
-        sessionName: session.name,
-        uploadDir: UPLOAD_DIR,
-      });
-      update.run('enviado', notes.join('; '), String(productId), new Date().toISOString(), article.id);
-      enviados++;
-      if (notes.length) detalles.push({ articulo: article.order + 1, aviso: notes.join('; ') });
-    } catch (err) {
-      update.run('error', err.message.slice(0, 500), '', '', article.id);
-      errores++;
-      detalles.push({ articulo: article.order + 1, error: err.message });
-    }
-  }
-
-  res.json({
-    tienda: store.name || store.id,
-    enviados,
-    errores,
-    omitidos: articles.length - target.length,
-    detalles,
-  });
-});
-
 /* ---------- excel ---------- */
 app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
   const session = q.session.get(req.params.id);
@@ -606,7 +579,13 @@ async function backfillThumbs() {
   console.log('Miniaturas listas.');
 }
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Photo Linker en http://localhost:${PORT} (datos: ${DATA_DIR})`);
   backfillThumbs();
 });
+
+// Subir 280 fotos desde un celular puede tardar más que los 5 minutos que Node corta
+// por defecto; sin esto la conexión muere a media subida.
+server.requestTimeout = 0;
+server.headersTimeout = 10 * 60 * 1000;
+server.timeout = 0;

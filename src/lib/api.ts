@@ -6,7 +6,6 @@ export type Session = {
   groupSize: number;
   storeId: string;
   storeName: string;
-  sent: number;
   createdAt: string;
   total: number;
   completed: number;
@@ -30,14 +29,6 @@ export type Variant = {
   stock: number | null;
 };
 
-export type PushResult = {
-  tienda: string;
-  enviados: number;
-  errores: number;
-  omitidos: number;
-  detalles: { articulo: number; aviso?: string; error?: string }[];
-};
-
 export type Store = { id: string; name: string };
 
 export type Lookup = {
@@ -52,8 +43,6 @@ export type Article = {
   order: number;
   barcode: string;
   productName: string;
-  ventlyStatus: 'pendiente' | 'enviado' | 'error' | 'reenviar';
-  ventlyMessage: string;
   photos: Photo[];
   coverId: string | null;
   coverUrl: string;
@@ -105,8 +94,8 @@ export const api = {
 
   listStores: () => handle<Store[]>(fetch('/api/stores', { headers: adminHeaders() })),
 
-  push: (sessionId: string, mode: 'entry' | 'absolute') =>
-    handle<PushResult>(fetch(`/api/sessions/${sessionId}/push`, { method: 'POST', ...json({ mode }) })),
+  setStore: (sessionId: string, storeId: string) =>
+    handle<Session>(fetch(`/api/sessions/${sessionId}`, { method: 'PATCH', ...json({ storeId }) })),
 
   addPhotos: (sessionId: string, files: File[], onProgress?: (pct: number) => void) =>
     uploadWithProgress(`/api/sessions/${sessionId}/photos`, { files, onProgress }),
@@ -174,7 +163,14 @@ function uploadWithProgress(
         if (xhr.status >= 200 && xhr.status < 300) resolve(body);
         else reject(new Error(body.error || `Error ${xhr.status}`));
       } catch {
-        reject(new Error('Respuesta inválida del servidor'));
+        // Sin JSON: casi siempre el proxy (502/504) o el servidor cortado a media subida.
+        reject(
+          new Error(
+            xhr.status === 0
+              ? 'Se cortó la conexión durante la subida. Intenta con menos fotos a la vez.'
+              : `El servidor respondió ${xhr.status} sin datos. Si es 502, la subida fue demasiado grande de un jalón.`
+          )
+        );
       }
     };
     xhr.onerror = () => reject(new Error('Fallo de red al subir las imágenes'));

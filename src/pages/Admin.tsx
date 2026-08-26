@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, clearPin, getPin, setPin, type PushResult, type Session, type Store } from '../lib/api';
+import { api, clearPin, getPin, setPin, type Session, type Store } from '../lib/api';
 import { Button, Card, Input, Progress } from '../components/ui';
 
 export default function Admin() {
@@ -69,9 +69,6 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [storeId, setStoreId] = useState('');
   const [stores, setStores] = useState<Store[]>([]);
   const [files, setFiles] = useState<File[]>([]);
-  const [pushing, setPushing] = useState('');
-  const [asking, setAsking] = useState('');
-  const [pushResult, setPushResult] = useState<(PushResult & { sessionId: string }) | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState('');
@@ -111,19 +108,12 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     load();
   }
 
-  async function sendToVently(s: Session, mode: 'entry' | 'absolute') {
-    setPushing(s.id);
-    setPushResult(null);
-    setAsking('');
-    setError('');
+  async function changeStore(s: Session, storeId: string) {
     try {
-      const result = await api.push(s.id, mode);
-      setPushResult({ ...result, sessionId: s.id });
+      await api.setStore(s.id, storeId);
       await load();
     } catch (e) {
       setError((e as Error).message);
-    } finally {
-      setPushing('');
     }
   }
 
@@ -156,13 +146,13 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           />
           {stores.length > 0 && (
             <div>
-              <label className="mb-1 block text-sm font-medium">Tienda de Vently</label>
+              <label className="mb-1 block text-sm font-medium">Buscar tallas en</label>
               <select
                 value={storeId}
                 onChange={(e) => setStoreId(e.target.value)}
                 className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4"
               >
-                <option value="">Sin enviar a Vently (solo Excel)</option>
+                <option value="">Sin tienda (las tallas se escriben a mano)</option>
                 {stores.map((st) => (
                   <option key={st.id} value={st.id}>{st.name}</option>
                 ))}
@@ -239,49 +229,25 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               </div>
               <div className="text-right">
                 <p className="text-lg font-semibold">{s.completed} / {s.total}</p>
-                <p className="text-sm text-slate-500">
-                  artículos · {s.percent}%
-                  {s.storeId && ` · ${s.sent} en Vently`}
-                </p>
+                <p className="text-sm text-slate-500">artículos · {s.percent}%</p>
               </div>
             </div>
 
             <div className="my-4"><Progress percent={s.percent} /></div>
 
-            {asking === s.id && (
-              <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="text-sm font-medium">¿Qué es el stock capturado?</p>
-                <p className="mt-1 text-sm text-slate-500">
-                  Se enviarán solo los artículos completados que no se hayan enviado antes.
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button onClick={() => sendToVently(s, 'entry')}>
-                    Mercancía que entra (suma al stock)
-                  </Button>
-                  <Button variant="secondary" onClick={() => sendToVently(s, 'absolute')}>
-                    Conteo (reemplaza el stock)
-                  </Button>
-                  <Button variant="ghost" onClick={() => setAsking('')}>Cancelar</Button>
-                </div>
-              </div>
-            )}
-
-            {pushResult?.sessionId === s.id && (
-              <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                <p className="font-medium">
-                  {pushResult.enviados} enviados a {pushResult.tienda}
-                  {pushResult.errores > 0 && ` · ${pushResult.errores} con error`}
-                  {pushResult.omitidos > 0 && ` · ${pushResult.omitidos} omitidos`}
-                </p>
-                {pushResult.detalles.length > 0 && (
-                  <ul className="mt-2 space-y-1 text-slate-600">
-                    {pushResult.detalles.map((d, i) => (
-                      <li key={i} className={d.error ? 'text-red-600' : ''}>
-                        Artículo {d.articulo}: {d.error || d.aviso}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+            {stores.length > 0 && (
+              <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-slate-500">Buscar tallas en:</span>
+                <select
+                  value={s.storeId}
+                  onChange={(e) => changeStore(s, e.target.value)}
+                  className="h-9 rounded-lg border border-slate-300 bg-white px-2"
+                >
+                  <option value="">— sin tienda (captura a mano) —</option>
+                  {stores.map((st) => (
+                    <option key={st.id} value={st.id}>{st.name}</option>
+                  ))}
+                </select>
               </div>
             )}
 
@@ -293,15 +259,6 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 {copied === s.id ? '¡Enlace copiado!' : 'Copiar enlace'}
               </Button>
               <a href={api.exportUrl(s.id)}><Button variant="secondary">Descargar Excel</Button></a>
-              {s.storeId && (
-                <Button
-                  variant="secondary"
-                  disabled={pushing === s.id}
-                  onClick={() => setAsking(asking === s.id ? '' : s.id)}
-                >
-                  {pushing === s.id ? 'Enviando…' : `Enviar a ${s.storeName || 'Vently'}`}
-                </Button>
-              )}
               <Button variant="danger" onClick={() => remove(s)}>Eliminar</Button>
             </div>
           </Card>

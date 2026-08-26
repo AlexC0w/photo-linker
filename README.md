@@ -134,10 +134,11 @@ Detalle importante: el catálogo de tallas de una tienda trae nombres repetidos 
 El endpoint de búsqueda va **sin PIN**, porque lo usa el capturista: quien tenga el enlace de la
 sesión puede consultar códigos de esa tienda. Las credenciales nunca salen del servidor.
 
-## Enviar a Vently (en pausa)
+La app **solo lee** de Vently. No escribe nada: no crea productos, no mueve stock, no sube fotos.
+El destino de lo capturado es el Excel.
 
-> Esta parte existe pero está apagada: sin `VENTLY_STORES` no aparece ni el selector ni el botón.
-> La búsqueda de tallas de arriba es lo único que se usa hoy.
+La tienda se elige al crear la sesión y también se puede **cambiar después**, desde la tarjeta de la
+sesión en `/admin` — útil para una sesión que ya venías capturando a mano.
 
 Vently es **un deploy por tienda**: cada una tiene su propia base, su propio MinIO y sus propios
 catálogos (la talla "25" no es el mismo `size_id` en RML que en DOSX1). Por eso las tiendas se
@@ -176,5 +177,15 @@ entradas de stock. Si editas un artículo ya enviado, vuelve a quedar por enviar
 5. Puerto interno `3000`, dominio con HTTPS de Let's Encrypt.
 6. Deploy. La base de datos se crea sola en el primer arranque; no hay pasos manuales.
 
-Si vas a subir muchas fotos de golpe, revisa que el proxy (Traefik/Nginx) permita cuerpos grandes;
-el límite de la app es 25 MB por imagen y 500 imágenes por subida.
+### Subidas grandes
+
+Las fotos se suben **en tandas** (múltiplos de las fotos por artículo, ~20 por request) en vez de un
+solo envío gigante: 280 fotos de celular pasan de 1 GB y el proxy corta la conexión con un 502 mucho
+antes de terminar. Las miniaturas se generan de 4 en 4 y `sharp` va con caché apagado y un solo hilo,
+porque lanzarlas todas juntas tumbaba el proceso en un contenedor con poca RAM — ese era el
+"Respuesta inválida del servidor".
+
+Probado con 280 fotos: 70 artículos, sin errores y con el proceso por debajo de 100 MB.
+
+El límite por imagen sigue siendo 25 MB. Si aun así ves 502, revisa la memoria asignada al
+contenedor en Dokploy.

@@ -101,10 +101,14 @@ export default function Capture() {
         const found = await api.lookup(sessionId, code.trim());
         setProductName(found.productName);
         setReference(Object.fromEntries(found.sizes.map((s) => [s.size, s.stockActual])));
-        // Conserva lo que ya se haya tecleado para esas tallas.
+        // Nunca se pierde lo ya capturado: las tallas que no vengan de Vently
+        // (escritas a mano, o con otro nombre) se conservan al final.
         setRows((prev) => {
           const typed = new Map(prev.filter((r) => r.stock !== '').map((r) => [r.size, r.stock]));
-          return found.sizes.map((s) => ({ size: s.size, stock: typed.get(s.size) ?? '' }));
+          const fromVently = found.sizes.map((s) => ({ size: s.size, stock: typed.get(s.size) ?? '' }));
+          const nombres = new Set(found.sizes.map((s) => s.size));
+          const sueltas = prev.filter((r) => r.stock !== '' && !nombres.has(r.size));
+          return [...fromVently, ...sueltas];
         });
         setLookupState('ok');
         setLookupMsg(found.colorName ? `${found.productName} · ${found.colorName}` : found.productName);
