@@ -116,7 +116,8 @@ El PIN va en el header `x-admin-pin` (o `?pin=` para la descarga del Excel).
 
 ## Lector de código de barras (cámara)
 
-En la captura hay un botón **Escanear con la cámara**. Funciona en Android y en iPhone:
+Junto al campo del código hay un botón chico con el icono de código de barras que abre la cámara.
+Funciona en Android y en iPhone:
 
 - **Android/Chrome** usa el `BarcodeDetector` nativo del sistema: rápido y sin descargar nada.
 - **iOS/Safari** no lo tiene, así que ahí se carga **ZXing** bajo demanda (chunk aparte de ~100 KB
@@ -147,9 +148,8 @@ búsqueda prueba ambas formas y guarda **el código tal como está en la tienda*
 
 ## Buscar tallas por código de barras (solo lectura)
 
-Si la sesión está ligada a una tienda, el capturista escribe el código, da **Enter** (o toca
-*Buscar tallas por código*) y la app trae del sistema **las tallas reales de ese producto en ese
-color**, junto con el stock que Vently tiene hoy como referencia en la columna *Sistema*. El
+Si la sesión está ligada a una tienda, la búsqueda se dispara sola: al escanear, al dar **Enter** o
+al salir del campo del código. Trae del sistema **las tallas reales de ese producto en ese color**, junto con el stock que Vently tiene hoy como referencia en la columna *Sistema*. El
 capturista solo teclea cantidades.
 
 Es una consulta de **solo lectura** (`GET /products/variant/:code`, `GET /products/:id`, `GET /sizes`):

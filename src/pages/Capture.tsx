@@ -28,6 +28,7 @@ export default function Capture() {
 
   const barcodeRef = useRef<HTMLInputElement>(null);
   const stockInputs = useRef(new Map<number, HTMLInputElement | null>());
+  const ultimoBuscado = useRef(''); // evita rebuscar lo mismo al salir del campo
   const current = articles[index];
 
   useEffect(() => {
@@ -53,6 +54,7 @@ export default function Capture() {
     setRows(buildDraft(current, session.sizes));
     setProductName(current.productName || '');
     setReference({});
+    ultimoBuscado.current = '';
     setLookupState('idle');
     setLookupMsg('');
     setStatus('idle');
@@ -99,13 +101,18 @@ export default function Capture() {
   */
   const lookup = useCallback(
     async (code: string) => {
-      if (!session?.storeId || !code.trim()) return;
+      const limpio = code.trim();
+      if (!session?.storeId || !limpio || limpio === ultimoBuscado.current) return;
+      ultimoBuscado.current = limpio;
       setLookupState('buscando');
       setLookupMsg('');
       try {
         const found = await api.lookup(sessionId, code.trim());
         // La tienda manda: si el código guardado trae otro cero inicial, ese es el bueno.
-        if (found.code && found.code !== code.trim()) setBarcode(found.code);
+        if (found.code && found.code !== limpio) {
+          setBarcode(found.code);
+          ultimoBuscado.current = found.code;
+        }
         setProductName(found.productName);
         setReference(Object.fromEntries(found.sizes.map((s) => [s.size, s.stockActual])));
         // Nunca se pierde lo ya capturado: las tallas que no vengan de Vently
@@ -120,6 +127,7 @@ export default function Capture() {
         setLookupState('ok');
         setLookupMsg(found.colorName ? `${found.productName} · ${found.colorName}` : found.productName);
       } catch (e) {
+        ultimoBuscado.current = ''; // que se pueda reintentar el mismo código
         setLookupState('sin-resultado');
         setLookupMsg((e as Error).message);
       }
@@ -243,32 +251,33 @@ export default function Capture() {
             </span>
           )}
         </div>
-        <Input
-          ref={barcodeRef}
-          value={barcode}
-          onChange={(e) => setBarcode(e.target.value)}
-          onKeyDown={onBarcodeKeyDown}
-          inputMode="numeric"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="Ej. 0750123456789"
-          className="h-14 font-mono text-lg"
-        />
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div className="flex gap-2">
+          <Input
+            ref={barcodeRef}
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+            onKeyDown={onBarcodeKeyDown}
+            onBlur={() => lookup(barcode)}
+            inputMode="numeric"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Ej. 0750123456789"
+            className="h-14 flex-1 font-mono text-lg"
+          />
           {puedeEscanear() && (
-            <Button size="lg" variant="secondary" onClick={() => setEscaneando(true)}>
-              Escanear con la cámara
-            </Button>
-          )}
-          {session.storeId && (
-            <Button
-              variant="secondary"
-              size="lg"
-              disabled={lookupState === 'buscando'}
-              onClick={() => lookup(barcode)}
+            <button
+              type="button"
+              onClick={() => setEscaneando(true)}
+              title="Escanear con la cámara"
+              aria-label="Escanear con la cámara"
+              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
             >
-              {lookupState === 'buscando' ? 'Buscando…' : 'Buscar tallas'}
-            </Button>
+              {/* código de barras */}
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                <path d="M3 7V5.5A1.5 1.5 0 0 1 4.5 4H6M18 4h1.5A1.5 1.5 0 0 1 21 5.5V7M21 17v1.5a1.5 1.5 0 0 1-1.5 1.5H18M6 20H4.5A1.5 1.5 0 0 1 3 18.5V17" />
+                <path d="M7 8v8M10 8v8M13.5 8v8M17 8v8" />
+              </svg>
+            </button>
           )}
         </div>
       </div>
