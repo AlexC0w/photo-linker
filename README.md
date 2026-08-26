@@ -26,6 +26,7 @@ N en N funciona, y corregir un corte es solo separar o unir.
 - **Base de datos:** SQLite (better-sqlite3) — un solo archivo, cero configuración.
 - **Imágenes:** disco del servidor (`DATA_DIR/uploads`), con miniaturas generadas por `sharp`.
 - **Excel:** ExcelJS.
+- **Config local:** `.env` opcional, cargado con `node --env-file-if-exists` (no requiere dotenv).
 
 Todo vive en un solo proyecto: `npm install && npm run dev`. No hay servicios externos ni costos.
 
@@ -113,7 +114,30 @@ no se convierte a notación científica.
 
 El PIN va en el header `x-admin-pin` (o `?pin=` para la descarga del Excel).
 
-## Enviar a Vently
+## Buscar tallas por código de barras (solo lectura)
+
+Si la sesión está ligada a una tienda, el capturista escribe el código, da **Enter** (o toca
+*Buscar tallas por código*) y la app trae del sistema **las tallas reales de ese producto en ese
+color**, junto con el stock que Vently tiene hoy como referencia en la columna *Sistema*. El
+capturista solo teclea cantidades.
+
+Es una consulta de **solo lectura** (`GET /products/variant/:code`, `GET /products/:id`, `GET /sizes`):
+no escribe nada en Vently. Basta un usuario con permiso `inventory.view`. Si el código no existe o
+la tienda no responde, la tabla se queda editable a mano y la captura sigue — la búsqueda ayuda,
+nunca bloquea.
+
+El nombre del producto encontrado se guarda y sale en el Excel, en la columna **Producto**.
+
+Detalle importante: el catálogo de tallas de una tienda trae nombres repetidos y basura (`''`, `'.'`,
+`'1'`), así que la resolución es siempre **id → nombre**, nunca al revés.
+
+El endpoint de búsqueda va **sin PIN**, porque lo usa el capturista: quien tenga el enlace de la
+sesión puede consultar códigos de esa tienda. Las credenciales nunca salen del servidor.
+
+## Enviar a Vently (en pausa)
+
+> Esta parte existe pero está apagada: sin `VENTLY_STORES` no aparece ni el selector ni el botón.
+> La búsqueda de tallas de arriba es lo único que se usa hoy.
 
 Vently es **un deploy por tienda**: cada una tiene su propia base, su propio MinIO y sus propios
 catálogos (la talla "25" no es el mismo `size_id` en RML que en DOSX1). Por eso las tiendas se

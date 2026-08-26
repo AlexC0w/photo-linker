@@ -102,6 +102,51 @@ async function getSizes(store) {
 
 const normalize = (s) => String(s ?? '').trim().toLowerCase();
 
+/*
+  Búsqueda de solo lectura: código de barras → tallas del producto, con su stock actual.
+
+  El catálogo de tallas de una tienda trae nombres repetidos y basura ('', '.', '1'),
+  así que se resuelve **id → nombre**, que sí es único, nunca al revés.
+*/
+export async function lookupByCode(store, code) {
+  const clean = String(code || '').trim();
+  if (!clean) throw new Error('Falta el código de barras');
+
+  const anchor = await call(store, `/products/variant/${encodeURIComponent(clean)}`).catch((e) => {
+    if (e.status === 404) {
+      const err = new Error(`El código ${clean} no existe en ${store.name || store.id}`);
+      err.status = 404;
+      throw err;
+    }
+    throw e;
+  });
+
+  const product = await call(store, `/products/${anchor.product_id}`);
+  const sizes = await getSizes(store);
+  const nameOf = new Map(sizes.map((s) => [s.id ?? s.size_id, s.name]));
+
+  const raw = product.variants;
+  const variants = Array.isArray(raw) ? raw : JSON.parse(raw || '[]');
+
+  const rows = variants
+    .filter((v) => v.color_id === anchor.color_id)
+    .map((v) => ({
+      size: nameOf.get(v.size_id) || '',
+      code: v.code,
+      stockActual: Number(v.stock) || 0,
+      scanned: v.code === clean,
+    }))
+    .filter((r) => r.size)
+    .sort((a, b) => a.size.localeCompare(b.size, 'es', { numeric: true }));
+
+  return {
+    productId: anchor.product_id,
+    productName: anchor.product_name || product.name || '',
+    colorName: anchor.color_name || '',
+    sizes: rows,
+  };
+}
+
 /* Reconstruye el JSON que `PATCH /products/:id` espera (valida el producto completo). */
 function productPayload(product, variantOverrides = new Map()) {
   return {

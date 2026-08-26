@@ -40,10 +40,18 @@ export type PushResult = {
 
 export type Store = { id: string; name: string };
 
+export type Lookup = {
+  productId: number;
+  productName: string;
+  colorName: string;
+  sizes: { size: string; code: string; stockActual: number; scanned: boolean }[];
+};
+
 export type Article = {
   id: string;
   order: number;
   barcode: string;
+  productName: string;
   ventlyStatus: 'pendiente' | 'enviado' | 'error' | 'reenviar';
   ventlyMessage: string;
   photos: Photo[];
@@ -108,10 +116,16 @@ export const api = {
 
   getSession: (id: string) => handle<{ session: Session; articles: Article[] }>(fetch(`/api/sessions/${id}`)),
 
-  saveArticle: (articleId: string, barcode: string, variants: VariantDraft[]) =>
+  saveArticle: (articleId: string, barcode: string, productName: string, variants: VariantDraft[]) =>
     handle<{ article: Article; stats: Session }>(
-      fetch(`/api/articles/${articleId}/variants`, { method: 'PUT', ...json({ barcode, variants }) })
+      fetch(`/api/articles/${articleId}/variants`, {
+        method: 'PUT',
+        ...json({ barcode, productName, variants }),
+      })
     ),
+
+  lookup: (sessionId: string, code: string) =>
+    handle<Lookup>(fetch(`/api/sessions/${sessionId}/lookup?code=${encodeURIComponent(code)}`)),
 
   splitArticle: (articleId: string, photoId: string) =>
     handle<{ ok: true }>(fetch(`/api/articles/${articleId}/split`, { method: 'POST', ...json({ photoId }) })),

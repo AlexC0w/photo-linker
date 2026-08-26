@@ -38,6 +38,7 @@ db.exec(`
     ventlyMessage TEXT NOT NULL DEFAULT '',
     ventlyProductId TEXT NOT NULL DEFAULT '',
     ventlySentAt TEXT NOT NULL DEFAULT '',
+    productName TEXT NOT NULL DEFAULT '',
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
   );
@@ -80,6 +81,7 @@ for (const [col, def] of [
   ['ventlyMessage', `TEXT NOT NULL DEFAULT ''`],
   ['ventlyProductId', `TEXT NOT NULL DEFAULT ''`],
   ['ventlySentAt', `TEXT NOT NULL DEFAULT ''`],
+  ['productName', `TEXT NOT NULL DEFAULT ''`],
 ]) {
   if (!columnsOf('articles').includes(col)) db.exec(`ALTER TABLE articles ADD COLUMN ${col} ${def}`);
 }

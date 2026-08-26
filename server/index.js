@@ -6,7 +6,7 @@ import ExcelJS from 'exceljs';
 import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { db, DATA_DIR, UPLOAD_DIR, THUMB_DIR } from './db.js';
-import { findStore, publicStores, pushArticle } from './vently.js';
+import { findStore, lookupByCode, publicStores, pushArticle } from './vently.js';
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PIN = process.env.ADMIN_PIN || '1234';
@@ -115,6 +115,7 @@ function loadArticle(row) {
     id: row.id,
     order: row.order,
     barcode: row.barcode,
+    productName: row.productName,
     ventlyStatus: row.ventlyStatus,
     ventlyMessage: row.ventlyMessage,
     photos,
@@ -238,6 +239,7 @@ app.put('/api/articles/:id/variants', (req, res) => {
   if (!article) return res.status(404).json({ error: 'Artículo no encontrado' });
 
   const barcode = String(req.body.barcode ?? article.barcode).trim();
+  const productName = String(req.body.productName ?? article.productName ?? '').trim().slice(0, 200);
   const rows = Array.isArray(req.body.variants) ? req.body.variants : [];
   const now = new Date().toISOString();
   const clean = [];
@@ -260,12 +262,9 @@ app.put('/api/articles/:id/variants', (req, res) => {
     clean.forEach((v, i) => insert.run(nanoid(12), article.id, v.size, v.stock, i, now));
     // Si ya se había enviado y cambian los datos, vuelve a quedar por enviar.
     const status = article.ventlyStatus === 'enviado' ? 'reenviar' : article.ventlyStatus;
-    db.prepare('UPDATE articles SET barcode = ?, ventlyStatus = ?, updatedAt = ? WHERE id = ?').run(
-      barcode,
-      status,
-      now,
-      article.id
-    );
+    db.prepare(
+      'UPDATE articles SET barcode = ?, productName = ?, ventlyStatus = ?, updatedAt = ? WHERE id = ?'
+    ).run(barcode, productName, status, now, article.id);
   })();
 
   res.json({
@@ -432,6 +431,25 @@ app.post('/api/photos/:id/cover', (req, res) => {
 app.get('/api/stores', requireAdmin, (req, res) => res.json(publicStores()));
 
 /*
+  Búsqueda de tallas por código de barras. Es de SOLO LECTURA y la usa el capturista,
+  así que va sin PIN: quien tiene el enlace de la sesión puede consultar su tienda.
+  Las credenciales de Vently nunca salen del servidor.
+*/
+app.get('/api/sessions/:id/lookup', async (req, res) => {
+  const session = q.session.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+  const store = findStore(session.storeId);
+  if (!store) return res.status(400).json({ error: 'Esta sesión no está ligada a una tienda' });
+
+  try {
+    res.json(await lookupByCode(store, req.query.code));
+  } catch (err) {
+    res.status(err.status === 404 ? 404 : 502).json({ error: err.message });
+  }
+});
+
+/*
   Envía a Vently los artículos completados que aún no se han enviado.
   mode: 'entry' suma el stock como entrada de mercancía; 'absolute' lo fija como stock final.
 */
@@ -496,6 +514,7 @@ app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
   ws.columns = [
     { header: 'Imagen', key: 'imagen', width: 14 },
     { header: 'Artículo', key: 'articulo', width: 10 },
+    { header: 'Producto', key: 'producto', width: 38 },
     { header: 'Código de barras', key: 'barcode', width: 26 },
     { header: 'Talla', key: 'talla', width: 10 },
     { header: 'Stock', key: 'stock', width: 10 },
@@ -514,6 +533,7 @@ app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
       const row = ws.addRow({
         imagen: '',
         articulo: i + 1,
+        producto: article.productName || '',
         barcode: article.barcode,
         talla: v.size,
         stock: v.stock ?? '',
@@ -530,7 +550,7 @@ app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
     const lastRowNumber = ws.rowCount;
     if (lastRowNumber > firstRowNumber) {
       // Foto, número de artículo, código y archivo son del artículo: una celda a lo alto de sus tallas.
-      for (const col of [1, 2, 3, 6, 7]) ws.mergeCells(firstRowNumber, col, lastRowNumber, col);
+      for (const col of [1, 2, 3, 4, 7, 8]) ws.mergeCells(firstRowNumber, col, lastRowNumber, col);
     }
 
     const thumb = cover?.thumbUrl && path.join(THUMB_DIR, path.basename(cover.thumbUrl));

@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n API,WEB -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
-    "dev:api": "node --watch server/index.js",
+    "dev:api": "node --env-file-if-exists=.env --watch server/index.js",
     "dev:web": "vite",
     "build": "tsc -b --noEmit && vite build",
-    "start": "node server/index.js",
+    "start": "node --env-file-if-exists=.env server/index.js",
     "preview": "vite preview"
   },
   "dependencies": {

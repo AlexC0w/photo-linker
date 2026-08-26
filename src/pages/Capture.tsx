@@ -16,6 +16,10 @@ export default function Capture() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [zoom, setZoom] = useState<string | null>(null);
+  const [productName, setProductName] = useState('');
+  const [reference, setReference] = useState<Record<string, number>>({});
+  const [lookupState, setLookupState] = useState<'idle' | 'buscando' | 'ok' | 'sin-resultado'>('idle');
+  const [lookupMsg, setLookupMsg] = useState('');
 
   const barcodeRef = useRef<HTMLInputElement>(null);
   const stockInputs = useRef(new Map<number, HTMLInputElement | null>());
@@ -42,6 +46,10 @@ export default function Capture() {
     if (!current || !session) return;
     setBarcode(current.barcode || '');
     setRows(buildDraft(current, session.sizes));
+    setProductName(current.productName || '');
+    setReference({});
+    setLookupState('idle');
+    setLookupMsg('');
     setStatus('idle');
     setSearchParams({ a: current.id }, { replace: true });
     if (window.matchMedia('(min-width: 640px)').matches) setTimeout(() => barcodeRef.current?.focus(), 0);
@@ -67,7 +75,7 @@ export default function Capture() {
       if (!current) return;
       setStatus('saving');
       try {
-        const { article, stats } = await api.saveArticle(current.id, barcode, rows);
+        const { article, stats } = await api.saveArticle(current.id, barcode, productName, rows);
         setArticles((prev) => prev.map((a) => (a.id === article.id ? article : a)));
         setSession(stats);
         setStatus('saved');
@@ -77,7 +85,35 @@ export default function Capture() {
         setStatus('error');
       }
     },
-    [current, barcode, rows, nextPending]
+    [current, barcode, productName, rows, nextPending]
+  );
+
+  /*
+    Busca el código en la tienda ligada a la sesión y trae las tallas reales del producto.
+    Es solo lectura: si falla, la tabla se queda como está y se sigue capturando a mano.
+  */
+  const lookup = useCallback(
+    async (code: string) => {
+      if (!session?.storeId || !code.trim()) return;
+      setLookupState('buscando');
+      setLookupMsg('');
+      try {
+        const found = await api.lookup(sessionId, code.trim());
+        setProductName(found.productName);
+        setReference(Object.fromEntries(found.sizes.map((s) => [s.size, s.stockActual])));
+        // Conserva lo que ya se haya tecleado para esas tallas.
+        setRows((prev) => {
+          const typed = new Map(prev.filter((r) => r.stock !== '').map((r) => [r.size, r.stock]));
+          return found.sizes.map((s) => ({ size: s.size, stock: typed.get(s.size) ?? '' }));
+        });
+        setLookupState('ok');
+        setLookupMsg(found.colorName ? `${found.productName} · ${found.colorName}` : found.productName);
+      } catch (e) {
+        setLookupState('sin-resultado');
+        setLookupMsg((e as Error).message);
+      }
+    },
+    [session?.storeId, sessionId]
   );
 
   const updateRow = (i: number, field: keyof VariantDraft, value: string) =>
@@ -89,11 +125,11 @@ export default function Capture() {
   // Enter encadena: código → primer stock → siguiente talla → guardar y siguiente artículo.
   const focusStock = (i: number) => stockInputs.current.get(i)?.focus();
 
-  function onBarcodeKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  async function onBarcodeKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    if (rows.length) focusStock(0);
-    else save(true);
+    if (session?.storeId) await lookup(barcode);
+    setTimeout(() => focusStock(0), 0);
   }
 
   function onStockKeyDown(e: React.KeyboardEvent<HTMLInputElement>, i: number) {
@@ -176,7 +212,16 @@ export default function Capture() {
       )}
 
       <div className="mt-4">
-        <label className="mb-1 block text-sm font-medium">Código de barras del artículo</label>
+        <div className="mb-1 flex items-baseline justify-between gap-2">
+          <label className="text-sm font-medium">Código de barras del artículo</label>
+          {session.storeId && (
+            <span className="truncate text-xs text-slate-400">
+              {lookupState === 'buscando' && 'buscando…'}
+              {lookupState === 'ok' && <span className="text-emerald-600">{lookupMsg}</span>}
+              {lookupState === 'sin-resultado' && <span className="text-amber-600">{lookupMsg}</span>}
+            </span>
+          )}
+        </div>
         <Input
           ref={barcodeRef}
           value={barcode}
@@ -188,22 +233,36 @@ export default function Capture() {
           placeholder="Ej. 0750123456789"
           className="h-14 font-mono text-lg"
         />
+        {session.storeId && (
+          <Button
+            variant="secondary"
+            className="mt-2 w-full"
+            disabled={lookupState === 'buscando'}
+            onClick={() => lookup(barcode)}
+          >
+            {lookupState === 'buscando' ? 'Buscando…' : 'Buscar tallas por código'}
+          </Button>
+        )}
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <div className="grid grid-cols-[1fr_7rem_2rem] items-center gap-2 border-b border-slate-200 px-3 py-2 text-xs font-medium text-slate-500">
+        <div className="grid grid-cols-[1fr_4rem_7rem_2rem] items-center gap-2 border-b border-slate-200 px-3 py-2 text-xs font-medium text-slate-500">
           <span>Talla</span>
+          <span className="text-center">Sistema</span>
           <span>Stock</span>
           <span />
         </div>
         {rows.map((row, i) => (
-          <div key={i} className="grid grid-cols-[1fr_7rem_2rem] items-center gap-2 border-b border-slate-100 px-3 py-2">
+          <div key={i} className="grid grid-cols-[1fr_4rem_7rem_2rem] items-center gap-2 border-b border-slate-100 px-3 py-2">
             <Input
               value={row.size}
               onChange={(e) => updateRow(i, 'size', e.target.value)}
               placeholder="Talla"
               className="h-12"
             />
+            <span className="text-center text-sm text-slate-400">
+              {reference[row.size] !== undefined ? reference[row.size] : '·'}
+            </span>
             <Input
               ref={(el) => { stockInputs.current.set(i, el); }}
               value={row.stock}
