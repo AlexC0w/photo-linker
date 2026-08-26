@@ -114,6 +114,23 @@ no se convierte a notación científica.
 
 El PIN va en el header `x-admin-pin` (o `?pin=` para la descarga del Excel).
 
+## Lector de código de barras (cámara)
+
+En la captura hay un botón **Escanear con la cámara**. Funciona en Android y en iPhone:
+
+- **Android/Chrome** usa el `BarcodeDetector` nativo del sistema: rápido y sin descargar nada.
+- **iOS/Safari** no lo tiene, así que ahí se carga **ZXing** bajo demanda (chunk aparte de ~100 KB
+  gzip, solo para quien abre el lector).
+
+Lee EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39 e ITF. Al leer, vibra, cierra la cámara, busca
+las tallas y deja el cursor en el primer stock.
+
+**Requiere HTTPS.** La cámara no abre por IP ni por http — en el celular hay que entrar por el
+dominio con certificado. En `localhost` sí funciona para probar.
+
+Detalle: un UPC-A de 12 dígitos escaneado suele llegar como EAN-13 con un cero al frente. La
+búsqueda prueba ambas formas y guarda **el código tal como está en la tienda**, no el escaneado.
+
 ## Buscar tallas por código de barras (solo lectura)
 
 Si la sesión está ligada a una tienda, el capturista escribe el código, da **Enter** (o toca

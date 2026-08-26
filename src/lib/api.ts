@@ -35,6 +35,7 @@ export type Lookup = {
   productId: number;
   productName: string;
   colorName: string;
+  code: string;
   sizes: { size: string; code: string; stockActual: number; scanned: boolean }[];
 };
 

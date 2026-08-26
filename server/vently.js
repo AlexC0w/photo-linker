@@ -106,14 +106,31 @@ export async function lookupByCode(store, code) {
   const clean = String(code || '').trim();
   if (!clean) throw new Error('Falta el código de barras');
 
-  const anchor = await call(store, `/products/variant/${encodeURIComponent(clean)}`).catch((e) => {
-    if (e.status === 404) {
-      const err = new Error(`El código ${clean} no existe en ${store.name || store.id}`);
-      err.status = 404;
-      throw err;
+  /*
+    Un UPC-A de 12 dígitos escaneado con el celular suele llegar como EAN-13 con un cero
+    al frente (y al revés). Se prueban las dos formas antes de darlo por inexistente.
+  */
+  const intentos = [clean];
+  if (/^\d{13}$/.test(clean) && clean.startsWith('0')) intentos.push(clean.slice(1));
+  else if (/^\d{12}$/.test(clean)) intentos.push('0' + clean);
+
+  let anchor = null;
+  let ultimoError = null;
+  for (const intento of intentos) {
+    try {
+      anchor = await call(store, `/products/variant/${encodeURIComponent(intento)}`);
+      break;
+    } catch (e) {
+      if (e.status !== 404) throw e;
+      ultimoError = e;
     }
-    throw e;
-  });
+  }
+  if (!anchor) {
+    const err = new Error(`El código ${clean} no existe en ${store.name || store.id}`);
+    err.status = 404;
+    err.cause = ultimoError;
+    throw err;
+  }
 
   const product = await call(store, `/products/${anchor.product_id}`);
   const sizes = await getSizes(store);
@@ -128,7 +145,7 @@ export async function lookupByCode(store, code) {
       size: nameOf.get(v.size_id) || '',
       code: v.code,
       stockActual: Number(v.stock) || 0,
-      scanned: v.code === clean,
+      scanned: v.code === anchor.code,
     }))
     .filter((r) => r.size)
     .sort((a, b) => a.size.localeCompare(b.size, 'es', { numeric: true }));
@@ -137,6 +154,9 @@ export async function lookupByCode(store, code) {
     productId: anchor.product_id,
     productName: anchor.product_name || product.name || '',
     colorName: anchor.color_name || '',
+    // El código tal como está guardado en la tienda, que puede diferir del escaneado
+    // en el cero inicial. Es el que se debe guardar y exportar.
+    code: anchor.code,
     sizes: rows,
   };
 }

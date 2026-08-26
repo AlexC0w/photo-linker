@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { api, buildDraft, type Article, type Session, type VariantDraft } from '../lib/api';
 import { Badge, Button, Input, Progress } from '../components/ui';
+import { puedeEscanear } from '../lib/camera';
+
+// Solo se descarga el lector (y ZXing) cuando alguien lo abre.
+const Scanner = lazy(() => import('../components/Scanner'));
 
 export default function Capture() {
   const { sessionId = '' } = useParams();
@@ -20,6 +24,7 @@ export default function Capture() {
   const [reference, setReference] = useState<Record<string, number>>({});
   const [lookupState, setLookupState] = useState<'idle' | 'buscando' | 'ok' | 'sin-resultado'>('idle');
   const [lookupMsg, setLookupMsg] = useState('');
+  const [escaneando, setEscaneando] = useState(false);
 
   const barcodeRef = useRef<HTMLInputElement>(null);
   const stockInputs = useRef(new Map<number, HTMLInputElement | null>());
@@ -99,6 +104,8 @@ export default function Capture() {
       setLookupMsg('');
       try {
         const found = await api.lookup(sessionId, code.trim());
+        // La tienda manda: si el código guardado trae otro cero inicial, ese es el bueno.
+        if (found.code && found.code !== code.trim()) setBarcode(found.code);
         setProductName(found.productName);
         setReference(Object.fromEntries(found.sizes.map((s) => [s.size, s.stockActual])));
         // Nunca se pierde lo ya capturado: las tallas que no vengan de Vently
@@ -118,6 +125,16 @@ export default function Capture() {
       }
     },
     [session?.storeId, sessionId]
+  );
+
+  const alEscanear = useCallback(
+    async (code: string) => {
+      setEscaneando(false);
+      setBarcode(code);
+      if (session?.storeId) await lookup(code);
+      setTimeout(() => stockInputs.current.get(0)?.focus(), 0);
+    },
+    [session?.storeId, lookup]
   );
 
   const updateRow = (i: number, field: keyof VariantDraft, value: string) =>
@@ -237,16 +254,23 @@ export default function Capture() {
           placeholder="Ej. 0750123456789"
           className="h-14 font-mono text-lg"
         />
-        {session.storeId && (
-          <Button
-            variant="secondary"
-            className="mt-2 w-full"
-            disabled={lookupState === 'buscando'}
-            onClick={() => lookup(barcode)}
-          >
-            {lookupState === 'buscando' ? 'Buscando…' : 'Buscar tallas por código'}
-          </Button>
-        )}
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          {puedeEscanear() && (
+            <Button size="lg" variant="secondary" onClick={() => setEscaneando(true)}>
+              Escanear con la cámara
+            </Button>
+          )}
+          {session.storeId && (
+            <Button
+              variant="secondary"
+              size="lg"
+              disabled={lookupState === 'buscando'}
+              onClick={() => lookup(barcode)}
+            >
+              {lookupState === 'buscando' ? 'Buscando…' : 'Buscar tallas'}
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
@@ -309,6 +333,12 @@ export default function Capture() {
           Enter: del código pasa a las tallas y baja fila por fila; en la última guarda y avanza · Ctrl+Enter: guardar ya
         </p>
       </div>
+
+      {escaneando && (
+        <Suspense fallback={<div className="fixed inset-0 z-50 bg-black p-6 text-white">Abriendo cámara…</div>}>
+          <Scanner onDetect={alEscanear} onClose={() => setEscaneando(false)} />
+        </Suspense>
+      )}
 
       {zoom && (
         <div
