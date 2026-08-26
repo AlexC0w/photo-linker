@@ -164,14 +164,16 @@ export default function Scanner({ onDetect, onClose }: Props) {
         setMotor('ZXing');
 
         let n = 0;
-        await zxing.decodeFromConstraints(CONSTRAINTS, video, (result, err) => {
+        await zxing.decodeFromConstraints(CONSTRAINTS, video, (result) => {
           if (cancelado) return;
           if (result) return exito(result.getText());
+          /*
+            El error que llega aquí es siempre "en este cuadro no hay código"
+            (NotFoundException). No se muestra: no distingue un problema real y
+            además su `name` viene renombrado por la minificación, así que
+            filtrarlo por nombre no funciona en producción.
+          */
           if (++n % 5 === 0) setCuadros(n);
-          if (err && err.name && err.name !== 'NotFoundException' && err.name !== 'ChecksumException') {
-            // NotFound es lo normal en cada cuadro sin código; lo demás sí importa.
-            setError(err.message || err.name);
-          }
         });
       } catch (e) {
         setError(`No se pudo iniciar el lector: ${(e as Error).message}`);
@@ -196,7 +198,11 @@ export default function Scanner({ onDetect, onClose }: Props) {
     <div className="fixed inset-0 z-50 flex flex-col bg-black">
       <div className="flex items-center justify-between p-4 text-white">
         <span className="text-sm">
-          Escanear código <span className="text-white/50">· {motor}{cuadros ? ` · ${cuadros} cuadros` : ''}</span>
+          Escanear código{' '}
+          <span className="text-white/50">
+            · {motor}
+            {cuadros ? ` · buscando (${cuadros})` : ''}
+          </span>
         </span>
         <Button variant="secondary" onClick={onClose}>Cerrar</Button>
       </div>
