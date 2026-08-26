@@ -4,15 +4,16 @@ Herramienta interna para capturar **código de barras** y **stock** a partir de 
 
 Una persona sube todas las fotos de golpe desde el panel de administrador; la app las agrupa en
 artículos (varias fotos del mismo modelo, una es la portada) y otra persona, desde cualquier
-dispositivo, abre un enlace público y captura **una fila por talla**: talla, código de barras y stock.
+dispositivo, abre un enlace público y captura **un código de barras por artículo** y **el stock de
+cada talla**.
 
 ## Modelo
 
 ```
 session  ─ corrida de tallas + fotos por artículo
-  └ article  ─ grupo contiguo de fotos, una es la portada
+  └ article  ─ grupo contiguo de fotos (una es portada) + código de barras (string)
       ├ photo   ─ archivo original + miniatura
-      └ variant ─ talla + código de barras (string) + stock
+      └ variant ─ talla + stock
 ```
 
 Los artículos son **grupos contiguos** de fotos en el orden en que se dispararon: por eso agrupar de
@@ -72,20 +73,23 @@ npm start               # sirve API + frontend en http://localhost:3000
 3. La app arma los artículos por orden de disparo. Si algún corte salió mal, entra a **Agrupar** y
    usa *separar aquí* / *unir con el anterior*, o elige otra portada.
 4. Presiona **Copiar enlace** y mándaselo al empleado.
-5. El empleado abre el enlace: ve la portada grande (con las demás fotos como miniaturas) y una
-   tabla con la corrida de tallas ya prellenada. Solo escribe código y stock.
-   - `Enter` salta de código a stock, de fila a fila, y en la última fila guarda y pasa al siguiente
-     artículo · `Ctrl+Enter` guarda de inmediato · `←` `→` navegan · **Saltar** lo deja pendiente.
-   - Las filas que deje vacías no se guardan ni se exportan.
+5. El empleado abre el enlace: ve la portada grande (con las demás fotos como miniaturas), captura
+   **un solo código de barras** para el artículo y luego el stock de cada talla, con la corrida ya
+   prellenada.
+   - `Enter` pasa del código a la primera talla y va bajando fila por fila; en la última guarda y
+     salta al siguiente artículo · `Ctrl+Enter` guarda de inmediato · `←` `→` navegan ·
+     **Saltar** lo deja pendiente.
+   - Las tallas que deje sin stock no se guardan ni se exportan; un `0` sí se guarda (agotada).
    - Cada guardado va directo a la base de datos: puede cerrar el navegador y continuar donde iba.
 6. Cuando termine, en `/admin` presiona **Descargar Excel**.
 
-Un artículo cuenta como completado cuando tiene al menos una talla con código y stock.
+Un artículo cuenta como completado cuando tiene código de barras y al menos una talla con stock.
 
 El Excel lleva **una fila por talla** e incluye pendientes y completados, con columnas
-`Imagen | Artículo | Talla | Código de barras | Stock | Estado | Archivo`. La foto de portada va
-embebida (miniatura de 200 px generada al subir con `sharp`) y su celda se combina a lo alto de las
-tallas del artículo. Un artículo sin capturar sale igual, en una fila vacía marcada como pendiente.
+`Imagen | Artículo | Código de barras | Talla | Stock | Estado | Archivo`. Lo que es del artículo
+—foto, número, código y archivo— se combina en una celda a lo alto de sus tallas. La portada va
+embebida (miniatura de 200 px generada al subir con `sharp`). Un artículo sin capturar sale igual,
+en una fila vacía marcada como pendiente.
 El código de barras se guarda y exporta **siempre como texto**, así que conserva ceros iniciales y
 no se convierte a notación científica.
 
@@ -99,7 +103,7 @@ no se convierte a notación científica.
 | `POST`   | `/api/sessions/:id/photos`           | sí    | Agrega más fotos (se agrupan al final).|
 | `GET`    | `/api/sessions/:id`                  | no    | Sesión + artículos (capturista).      |
 | `DELETE` | `/api/sessions/:id`                  | sí    | Elimina sesión, fotos y tallas.       |
-| `PUT`    | `/api/articles/:id/variants`         | no    | Reemplaza las tallas del artículo.    |
+| `PUT`    | `/api/articles/:id/variants`         | no    | Guarda el código y reemplaza sus tallas.|
 | `POST`   | `/api/articles/:id/split`            | sí    | Separa el artículo a partir de una foto.|
 | `POST`   | `/api/articles/:id/merge-previous`   | sí    | Une el artículo con el anterior.      |
 | `POST`   | `/api/sessions/:id/regroup`          | sí    | Reagrupa toda la sesión de N en N.    |

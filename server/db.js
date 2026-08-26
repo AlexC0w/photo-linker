@@ -16,8 +16,8 @@ db.pragma('foreign_keys = ON');
   Modelo:
     session  → corrida de tallas + fotos por artículo
     photo    → una fotografía del dump, pertenece a un artículo (grupo contiguo)
-    article  → un modelo: varias fotos (una es portada) + varias tallas
-    variant  → una talla del artículo: código de barras (string) + stock
+    article  → un modelo: varias fotos (una es portada) + UN código de barras + varias tallas
+    variant  → una talla del artículo con su stock
 */
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
@@ -31,6 +31,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS articles (
     id TEXT PRIMARY KEY,
     sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    barcode TEXT NOT NULL DEFAULT '',
     "order" INTEGER NOT NULL DEFAULT 0,
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
@@ -52,7 +53,6 @@ db.exec(`
     id TEXT PRIMARY KEY,
     articleId TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
     size TEXT NOT NULL DEFAULT '',
-    barcode TEXT NOT NULL DEFAULT '',
     stock INTEGER,
     "order" INTEGER NOT NULL DEFAULT 0,
     updatedAt TEXT NOT NULL
@@ -64,7 +64,25 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_variants_article ON variants(articleId, "order");
 `);
 
-/* Migración del modelo viejo (1 foto = 1 producto) al nuevo (artículo con tallas). */
+const columnsOf = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+
+/* Migración: el código de barras pasó de estar por talla a estar en el artículo. */
+if (!columnsOf('articles').includes('barcode')) {
+  db.exec(`ALTER TABLE articles ADD COLUMN barcode TEXT NOT NULL DEFAULT ''`);
+}
+if (columnsOf('variants').includes('barcode')) {
+  db.exec(`
+    UPDATE articles SET barcode = COALESCE((
+      SELECT v.barcode FROM variants v
+      WHERE v.articleId = articles.id AND v.barcode <> ''
+      ORDER BY v."order" LIMIT 1
+    ), '') WHERE barcode = '';
+    ALTER TABLE variants DROP COLUMN barcode;
+  `);
+  console.log('Migrado: el código de barras ahora vive en el artículo.');
+}
+
+/* Migración del modelo original (1 foto = 1 producto). */
 const hasLegacy = db
   .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'products'")
   .get();
@@ -72,24 +90,22 @@ const hasLegacy = db
 if (hasLegacy) {
   const legacy = db.prepare('SELECT * FROM products ORDER BY sessionId, "order"').all();
   const insertArticle = db.prepare(
-    'INSERT INTO articles (id, sessionId, "order", createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)'
+    'INSERT INTO articles (id, sessionId, barcode, "order", createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?)'
   );
   const insertPhoto = db.prepare(`
     INSERT INTO photos (id, sessionId, articleId, imageUrl, thumbUrl, originalFilename, isCover, "order", createdAt)
     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
   const insertVariant = db.prepare(
-    'INSERT INTO variants (id, articleId, size, barcode, stock, "order", updatedAt) VALUES (?, ?, \'\', ?, ?, 0, ?)'
+    'INSERT INTO variants (id, articleId, size, stock, "order", updatedAt) VALUES (?, ?, \'\', ?, 0, ?)'
   );
 
   db.transaction(() => {
     for (const p of legacy) {
       const articleId = `a_${p.id}`;
-      insertArticle.run(articleId, p.sessionId, p.order, p.createdAt, p.updatedAt);
+      insertArticle.run(articleId, p.sessionId, p.barcode || '', p.order, p.createdAt, p.updatedAt);
       insertPhoto.run(p.id, p.sessionId, articleId, p.imageUrl, p.thumbUrl || '', p.originalFilename, p.order, p.createdAt);
-      if (p.barcode || p.stock !== null) {
-        insertVariant.run(`v_${p.id}`, articleId, p.barcode || '', p.stock, p.updatedAt);
-      }
+      if (p.stock !== null) insertVariant.run(`v_${p.id}`, articleId, p.stock, p.updatedAt);
     }
     db.exec('DROP TABLE products');
   })();

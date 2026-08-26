@@ -24,13 +24,13 @@ export type Photo = {
 export type Variant = {
   id?: string;
   size: string;
-  barcode: string;
   stock: number | null;
 };
 
 export type Article = {
   id: string;
   order: number;
+  barcode: string;
   photos: Photo[];
   coverId: string | null;
   coverUrl: string;
@@ -40,7 +40,7 @@ export type Article = {
 };
 
 // Fila de captura en pantalla (el stock se edita como texto para permitir vacío).
-export type VariantDraft = { size: string; barcode: string; stock: string };
+export type VariantDraft = { size: string; stock: string };
 
 const PIN_KEY = 'photolinker.pin';
 
@@ -88,9 +88,9 @@ export const api = {
 
   getSession: (id: string) => handle<{ session: Session; articles: Article[] }>(fetch(`/api/sessions/${id}`)),
 
-  saveVariants: (articleId: string, variants: VariantDraft[]) =>
+  saveArticle: (articleId: string, barcode: string, variants: VariantDraft[]) =>
     handle<{ article: Article; stats: Session }>(
-      fetch(`/api/articles/${articleId}/variants`, { method: 'PUT', ...json({ variants }) })
+      fetch(`/api/articles/${articleId}/variants`, { method: 'PUT', ...json({ barcode, variants }) })
     ),
 
   splitArticle: (articleId: string, photoId: string) =>
@@ -144,17 +144,16 @@ function uploadWithProgress(
 export function buildDraft(article: Article, sizes: string[]): VariantDraft[] {
   const captured = article.variants.map((v) => ({
     size: v.size,
-    barcode: v.barcode,
     stock: v.stock === null ? '' : String(v.stock),
   }));
   const missing = sizes
     .filter((s) => !captured.some((c) => c.size === s))
-    .map((s) => ({ size: s, barcode: '', stock: '' }));
+    .map((s) => ({ size: s, stock: '' }));
 
   const rank = (size: string) => {
     const i = sizes.indexOf(size);
     return i === -1 ? sizes.length : i; // tallas fuera de la corrida, al final
   };
   const rows = [...captured, ...missing].sort((a, b) => rank(a.size) - rank(b.size));
-  return rows.length ? rows : [{ size: '', barcode: '', stock: '' }];
+  return rows.length ? rows : [{ size: '', stock: '' }];
 }

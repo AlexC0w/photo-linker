@@ -77,8 +77,8 @@ const q = {
   stats: db.prepare(`
     SELECT
       (SELECT COUNT(*) FROM articles WHERE sessionId = @id) AS total,
-      (SELECT COUNT(*) FROM articles a WHERE a.sessionId = @id AND EXISTS (
-         SELECT 1 FROM variants v WHERE v.articleId = a.id AND v.barcode <> '' AND v.stock IS NOT NULL
+      (SELECT COUNT(*) FROM articles a WHERE a.sessionId = @id AND a.barcode <> '' AND EXISTS (
+         SELECT 1 FROM variants v WHERE v.articleId = a.id AND v.stock IS NOT NULL
        )) AS completed
   `),
 };
@@ -108,12 +108,13 @@ function loadArticle(row) {
   return {
     id: row.id,
     order: row.order,
+    barcode: row.barcode,
     photos,
     coverId: cover?.id ?? null,
     coverUrl: cover?.imageUrl ?? '',
     coverThumbUrl: cover?.thumbUrl ?? '',
     variants,
-    completed: variants.some((v) => v.barcode !== '' && v.stock !== null),
+    completed: row.barcode !== '' && variants.some((v) => v.stock !== null),
   };
 }
 
@@ -226,33 +227,33 @@ app.delete('/api/sessions/:id', requireAdmin, (req, res) => {
 });
 
 /* ---------- captura de tallas ---------- */
-// Reemplaza el juego de tallas del artículo. El código de barras SIEMPRE se guarda como string.
+// Guarda el código de barras del artículo (SIEMPRE string) y reemplaza sus tallas con stock.
 app.put('/api/articles/:id/variants', (req, res) => {
   const article = q.article.get(req.params.id);
   if (!article) return res.status(404).json({ error: 'Artículo no encontrado' });
 
+  const barcode = String(req.body.barcode ?? article.barcode).trim();
   const rows = Array.isArray(req.body.variants) ? req.body.variants : [];
   const now = new Date().toISOString();
   const clean = [];
 
   for (const raw of rows) {
     const size = String(raw.size ?? '').trim();
-    const barcode = String(raw.barcode ?? '').trim();
     const stockRaw = raw.stock;
     const stock =
       stockRaw === '' || stockRaw === null || stockRaw === undefined ? null : Number.parseInt(stockRaw, 10);
     if (stock !== null && Number.isNaN(stock)) return res.status(400).json({ error: `Stock inválido en la talla ${size || '?'}` });
-    if (!barcode && stock === null) continue; // fila vacía: no se guarda ni se exporta
-    clean.push({ size, barcode, stock });
+    if (stock === null) continue; // talla sin stock: no se guarda ni se exporta
+    clean.push({ size, stock });
   }
 
   const insert = db.prepare(
-    'INSERT INTO variants (id, articleId, size, barcode, stock, "order", updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO variants (id, articleId, size, stock, "order", updatedAt) VALUES (?, ?, ?, ?, ?, ?)'
   );
   db.transaction(() => {
     db.prepare('DELETE FROM variants WHERE articleId = ?').run(article.id);
-    clean.forEach((v, i) => insert.run(nanoid(12), article.id, v.size, v.barcode, v.stock, i, now));
-    db.prepare('UPDATE articles SET updatedAt = ? WHERE id = ?').run(now, article.id);
+    clean.forEach((v, i) => insert.run(nanoid(12), article.id, v.size, v.stock, i, now));
+    db.prepare('UPDATE articles SET barcode = ?, updatedAt = ? WHERE id = ?').run(barcode, now, article.id);
   })();
 
   res.json({
@@ -427,8 +428,8 @@ app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
   ws.columns = [
     { header: 'Imagen', key: 'imagen', width: 14 },
     { header: 'Artículo', key: 'articulo', width: 10 },
-    { header: 'Talla', key: 'talla', width: 10 },
     { header: 'Código de barras', key: 'barcode', width: 26 },
+    { header: 'Talla', key: 'talla', width: 10 },
     { header: 'Stock', key: 'stock', width: 10 },
     { header: 'Estado', key: 'estado', width: 14 },
     { header: 'Archivo', key: 'archivo', width: 36 },
@@ -438,17 +439,17 @@ app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
   articles.forEach((article, i) => {
     const cover = article.photos.find((p) => p.id === article.coverId) || article.photos[0];
     // Un artículo sin tallas capturadas sale igual, en una fila vacía, como pendiente.
-    const rows = article.variants.length ? article.variants : [{ size: '', barcode: '', stock: null }];
+    const rows = article.variants.length ? article.variants : [{ size: '', stock: null }];
     const firstRowNumber = ws.rowCount + 1;
 
     rows.forEach((v) => {
       const row = ws.addRow({
         imagen: '',
         articulo: i + 1,
+        barcode: article.barcode,
         talla: v.size,
-        barcode: v.barcode,
         stock: v.stock ?? '',
-        estado: v.barcode && v.stock !== null ? 'Completado' : 'Pendiente',
+        estado: article.completed ? 'Completado' : 'Pendiente',
         archivo: cover?.originalFilename ?? '',
       });
       row.height = IMG_PX * 0.75;
@@ -460,10 +461,8 @@ app.get('/api/sessions/:id/export.xlsx', requireAdmin, async (req, res) => {
 
     const lastRowNumber = ws.rowCount;
     if (lastRowNumber > firstRowNumber) {
-      // Una sola foto por artículo, abarcando sus filas de tallas.
-      ws.mergeCells(firstRowNumber, 1, lastRowNumber, 1);
-      ws.mergeCells(firstRowNumber, 2, lastRowNumber, 2);
-      ws.mergeCells(firstRowNumber, 7, lastRowNumber, 7);
+      // Foto, número de artículo, código y archivo son del artículo: una celda a lo alto de sus tallas.
+      for (const col of [1, 2, 3, 6, 7]) ws.mergeCells(firstRowNumber, col, lastRowNumber, col);
     }
 
     const thumb = cover?.thumbUrl && path.join(THUMB_DIR, path.basename(cover.thumbUrl));

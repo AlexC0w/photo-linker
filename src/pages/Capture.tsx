@@ -10,14 +10,15 @@ export default function Capture() {
   const [session, setSession] = useState<Session | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
   const [index, setIndex] = useState(0);
+  const [barcode, setBarcode] = useState('');
   const [rows, setRows] = useState<VariantDraft[]>([]);
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [zoom, setZoom] = useState<string | null>(null);
 
-  // Inputs de la tabla, para saltar de fila con Enter.
-  const inputs = useRef(new Map<string, HTMLInputElement | null>());
+  const barcodeRef = useRef<HTMLInputElement>(null);
+  const stockInputs = useRef(new Map<number, HTMLInputElement | null>());
   const current = articles[index];
 
   useEffect(() => {
@@ -36,17 +37,14 @@ export default function Capture() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // Al cambiar de artículo: prellena la corrida de tallas y enfoca el primer código vacío.
+  // Al cambiar de artículo: prellena la corrida de tallas y enfoca el código de barras.
   useEffect(() => {
     if (!current || !session) return;
-    const draft = buildDraft(current, session.sizes);
-    setRows(draft);
+    setBarcode(current.barcode || '');
+    setRows(buildDraft(current, session.sizes));
     setStatus('idle');
     setSearchParams({ a: current.id }, { replace: true });
-    if (window.matchMedia('(min-width: 640px)').matches) {
-      const firstEmpty = draft.findIndex((r) => !r.barcode);
-      setTimeout(() => inputs.current.get(`${Math.max(0, firstEmpty)}-barcode`)?.focus(), 0);
-    }
+    if (window.matchMedia('(min-width: 640px)').matches) setTimeout(() => barcodeRef.current?.focus(), 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id, session?.id]);
 
@@ -69,7 +67,7 @@ export default function Capture() {
       if (!current) return;
       setStatus('saving');
       try {
-        const { article, stats } = await api.saveVariants(current.id, rows);
+        const { article, stats } = await api.saveArticle(current.id, barcode, rows);
         setArticles((prev) => prev.map((a) => (a.id === article.id ? article : a)));
         setSession(stats);
         setStatus('saved');
@@ -79,23 +77,30 @@ export default function Capture() {
         setStatus('error');
       }
     },
-    [current, rows, nextPending]
+    [current, barcode, rows, nextPending]
   );
 
   const updateRow = (i: number, field: keyof VariantDraft, value: string) =>
     setRows((prev) => prev.map((r, j) => (j === i ? { ...r, [field]: value } : r)));
 
-  const addRow = () => setRows((prev) => [...prev, { size: '', barcode: '', stock: '' }]);
+  const addRow = () => setRows((prev) => [...prev, { size: '', stock: '' }]);
   const removeRow = (i: number) => setRows((prev) => prev.filter((_, j) => j !== i));
 
-  // Enter: código → stock → siguiente fila → guardar y siguiente artículo.
-  function onFieldKeyDown(e: React.KeyboardEvent<HTMLInputElement>, i: number, field: 'barcode' | 'stock') {
+  // Enter encadena: código → primer stock → siguiente talla → guardar y siguiente artículo.
+  const focusStock = (i: number) => stockInputs.current.get(i)?.focus();
+
+  function onBarcodeKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    if (field === 'barcode') return inputs.current.get(`${i}-stock`)?.focus();
-    const next = inputs.current.get(`${i + 1}-barcode`);
-    if (next) return next.focus();
-    save(true);
+    if (rows.length) focusStock(0);
+    else save(true);
+  }
+
+  function onStockKeyDown(e: React.KeyboardEvent<HTMLInputElement>, i: number) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (i + 1 < rows.length) focusStock(i + 1);
+    else save(true);
   }
 
   useEffect(() => {
@@ -122,7 +127,8 @@ export default function Capture() {
     return <div className="p-10 text-center text-slate-500">Esta sesión no tiene fotografías.</div>;
 
   const cover = current.photos.find((p) => p.id === current.coverId) || current.photos[0];
-  const captured = rows.filter((r) => r.barcode && r.stock !== '').length;
+  const piezas = rows.reduce((sum, r) => sum + (Number.parseInt(r.stock, 10) || 0), 0);
+  const conStock = rows.filter((r) => r.stock !== '').length;
 
   return (
     <div className="mx-auto max-w-3xl p-4 pb-28 sm:pb-8">
@@ -146,7 +152,7 @@ export default function Capture() {
           src={cover?.imageUrl}
           alt={cover?.originalFilename}
           onClick={() => cover && setZoom(cover.imageUrl)}
-          className="max-h-[42dvh] w-full cursor-zoom-in object-contain"
+          className="max-h-[38dvh] w-full cursor-zoom-in object-contain"
         />
         <div className="absolute top-3 right-3"><Badge completed={current.completed} /></div>
       </div>
@@ -169,48 +175,47 @@ export default function Capture() {
         </div>
       )}
 
+      <div className="mt-4">
+        <label className="mb-1 block text-sm font-medium">Código de barras del artículo</label>
+        <Input
+          ref={barcodeRef}
+          value={barcode}
+          onChange={(e) => setBarcode(e.target.value)}
+          onKeyDown={onBarcodeKeyDown}
+          inputMode="numeric"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="Ej. 0750123456789"
+          className="h-14 font-mono text-lg"
+        />
+      </div>
+
       <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <div className="grid grid-cols-[4.5rem_1fr_5rem_2rem] items-center gap-2 border-b border-slate-200 px-3 py-2 text-xs font-medium text-slate-500">
+        <div className="grid grid-cols-[1fr_7rem_2rem] items-center gap-2 border-b border-slate-200 px-3 py-2 text-xs font-medium text-slate-500">
           <span>Talla</span>
-          <span>Código de barras</span>
           <span>Stock</span>
           <span />
         </div>
         {rows.map((row, i) => (
-          <div key={i} className="grid grid-cols-[4.5rem_1fr_5rem_2rem] items-center gap-2 border-b border-slate-100 px-3 py-2">
+          <div key={i} className="grid grid-cols-[1fr_7rem_2rem] items-center gap-2 border-b border-slate-100 px-3 py-2">
             <Input
               value={row.size}
               onChange={(e) => updateRow(i, 'size', e.target.value)}
               placeholder="Talla"
-              className="h-11 px-2 text-center text-sm"
+              className="h-12"
             />
             <Input
-              ref={(el) => { inputs.current.set(`${i}-barcode`, el); }}
-              value={row.barcode}
-              onChange={(e) => updateRow(i, 'barcode', e.target.value)}
-              onKeyDown={(e) => onFieldKeyDown(e, i, 'barcode')}
-              inputMode="numeric"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="Código de barras"
-              className="h-11 px-3 font-mono"
-            />
-            <Input
-              ref={(el) => { inputs.current.set(`${i}-stock`, el); }}
+              ref={(el) => { stockInputs.current.set(i, el); }}
               value={row.stock}
               onChange={(e) => updateRow(i, 'stock', e.target.value)}
-              onKeyDown={(e) => onFieldKeyDown(e, i, 'stock')}
+              onKeyDown={(e) => onStockKeyDown(e, i)}
               type="number"
               min={0}
               step={1}
-              placeholder="0"
-              className="h-11 px-2 text-center"
+              placeholder="—"
+              className="h-12 px-2 text-center text-lg"
             />
-            <button
-              onClick={() => removeRow(i)}
-              title="Quitar fila"
-              className="text-slate-300 hover:text-red-600"
-            >
+            <button onClick={() => removeRow(i)} title="Quitar talla" className="text-slate-300 hover:text-red-600">
               ×
             </button>
           </div>
@@ -221,7 +226,7 @@ export default function Capture() {
       </div>
 
       <p className="mt-2 text-center text-xs text-slate-400">
-        {captured} de {rows.length} tallas capturadas
+        {conStock} {conStock === 1 ? 'talla' : 'tallas'} con stock · {piezas} piezas
       </p>
 
       <div className="fixed inset-x-0 bottom-0 space-y-2 border-t border-slate-200 bg-slate-50 p-3 sm:static sm:mt-4 sm:border-0 sm:bg-transparent sm:p-0">
@@ -238,7 +243,7 @@ export default function Capture() {
         <p className="hidden text-center text-xs text-slate-400 sm:block">
           {status === 'saved' && <span className="text-emerald-600">Guardado · </span>}
           {status === 'error' && <span className="text-red-600">{error} · </span>}
-          Enter: pasa de campo y de fila · en la última fila guarda y avanza · Ctrl+Enter: guardar ya
+          Enter: del código pasa a las tallas y baja fila por fila; en la última guarda y avanza · Ctrl+Enter: guardar ya
         </p>
       </div>
 

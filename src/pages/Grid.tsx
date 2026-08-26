@@ -83,10 +83,13 @@ export default function Grid() {
             <div className="p-2">
               <p className="text-xs text-slate-400">Artículo {a.order + 1}</p>
               {a.completed ? (
-                <p className="mt-1 text-xs text-emerald-700">
-                  {a.variants.length} {a.variants.length === 1 ? 'talla' : 'tallas'} ·{' '}
-                  {a.variants.reduce((sum, v) => sum + (v.stock ?? 0), 0)} pzas
-                </p>
+                <>
+                  <p className="mt-1 truncate font-mono text-xs">{a.barcode}</p>
+                  <p className="text-xs text-emerald-700">
+                    {a.variants.length} {a.variants.length === 1 ? 'talla' : 'tallas'} ·{' '}
+                    {a.variants.reduce((sum, v) => sum + (v.stock ?? 0), 0)} pzas
+                  </p>
+                </>
               ) : (
                 <p className="mt-1 text-xs text-amber-600">Pendiente</p>
               )}
