@@ -25,6 +25,7 @@ db.exec(`
     name TEXT NOT NULL,
     sizeRun TEXT NOT NULL DEFAULT '',
     groupSize INTEGER NOT NULL DEFAULT 1,
+    storeId TEXT NOT NULL DEFAULT '',
     createdAt TEXT NOT NULL
   );
 
@@ -33,6 +34,10 @@ db.exec(`
     sessionId TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     barcode TEXT NOT NULL DEFAULT '',
     "order" INTEGER NOT NULL DEFAULT 0,
+    ventlyStatus TEXT NOT NULL DEFAULT 'pendiente',
+    ventlyMessage TEXT NOT NULL DEFAULT '',
+    ventlyProductId TEXT NOT NULL DEFAULT '',
+    ventlySentAt TEXT NOT NULL DEFAULT '',
     createdAt TEXT NOT NULL,
     updatedAt TEXT NOT NULL
   );
@@ -65,6 +70,19 @@ db.exec(`
 `);
 
 const columnsOf = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+
+/* Migración: envío a Vently (tienda destino y estado por artículo). */
+if (!columnsOf('sessions').includes('storeId')) {
+  db.exec(`ALTER TABLE sessions ADD COLUMN storeId TEXT NOT NULL DEFAULT ''`);
+}
+for (const [col, def] of [
+  ['ventlyStatus', `TEXT NOT NULL DEFAULT 'pendiente'`],
+  ['ventlyMessage', `TEXT NOT NULL DEFAULT ''`],
+  ['ventlyProductId', `TEXT NOT NULL DEFAULT ''`],
+  ['ventlySentAt', `TEXT NOT NULL DEFAULT ''`],
+]) {
+  if (!columnsOf('articles').includes(col)) db.exec(`ALTER TABLE articles ADD COLUMN ${col} ${def}`);
+}
 
 /* Migración: el código de barras pasó de estar por talla a estar en el artículo. */
 if (!columnsOf('articles').includes('barcode')) {

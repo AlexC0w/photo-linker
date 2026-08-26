@@ -54,6 +54,7 @@ npm start               # sirve API + frontend en http://localhost:3000
 | `ADMIN_PIN` | `1234`    | PIN del panel `/admin`.                                   |
 | `PORT`      | `3000`    | Puerto del servidor.                                      |
 | `DATA_DIR`  | `./data`  | Carpeta con `app.db` y `uploads/`. En Docker: `/data`.    |
+| `VENTLY_STORES` | vacío | JSON con las tiendas de Vently a las que se puede enviar. |
 
 ## Rutas
 
@@ -111,6 +112,35 @@ no se convierte a notación científica.
 | `GET`    | `/api/sessions/:id/export.xlsx`      | sí    | Excel de la sesión.                   |
 
 El PIN va en el header `x-admin-pin` (o `?pin=` para la descarga del Excel).
+
+## Enviar a Vently
+
+Vently es **un deploy por tienda**: cada una tiene su propia base, su propio MinIO y sus propios
+catálogos (la talla "25" no es el mismo `size_id` en RML que en DOSX1). Por eso las tiendas se
+declaran en `VENTLY_STORES` y **cada sesión elige la suya al crearse**:
+
+```
+VENTLY_STORES=[{"id":"rml","name":"RML Store","url":"https://api.rml.mx","user":"linker","pass":"..."}]
+```
+
+Las credenciales viven solo en el servidor; al navegador solo llegan los nombres.
+
+**Los productos ya existen en Vently.** El linker no crea nada: liga foto y stock a lo que ya está.
+Por cada artículo completado hace:
+
+1. `GET /products/variant/{código}` → resuelve la variante ancla, y de ahí `product_id` y `color_id`.
+2. `GET /products/{id}` → trae las variantes reales del producto.
+3. Casa cada talla capturada contra el catálogo de esa tienda (`GET /sizes`) y contra las variantes
+   **del mismo color**. Lo que no exista se reporta como aviso, sin inventar IDs.
+4. `PATCH /products/{id}` con las fotos del artículo en `images[color_id]` (Vently admite 4 por
+   color, contando las que ya tenga) y `client_last_modified` para no pisar cambios ajenos.
+5. El stock, según lo que elijas al enviar:
+   - **Mercancía que entra** → `POST /entries`, que suma al stock y deja la entrada registrada.
+   - **Conteo** → el mismo `PATCH` fija el stock capturado como stock final.
+
+El botón está en `/admin`, por sesión, y muestra un resumen: enviados, errores y avisos por artículo.
+Solo se envían los artículos **completados que no se hayan enviado antes** — reenviar duplicaría
+entradas de stock. Si editas un artículo ya enviado, vuelve a quedar por enviar.
 
 ## Deploy en Dokploy
 

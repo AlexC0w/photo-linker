@@ -4,6 +4,9 @@ export type Session = {
   sizeRun: string;
   sizes: string[];
   groupSize: number;
+  storeId: string;
+  storeName: string;
+  sent: number;
   createdAt: string;
   total: number;
   completed: number;
@@ -27,10 +30,22 @@ export type Variant = {
   stock: number | null;
 };
 
+export type PushResult = {
+  tienda: string;
+  enviados: number;
+  errores: number;
+  omitidos: number;
+  detalles: { articulo: number; aviso?: string; error?: string }[];
+};
+
+export type Store = { id: string; name: string };
+
 export type Article = {
   id: string;
   order: number;
   barcode: string;
+  ventlyStatus: 'pendiente' | 'enviado' | 'error' | 'reenviar';
+  ventlyMessage: string;
   photos: Photo[];
   coverId: string | null;
   coverUrl: string;
@@ -76,9 +91,14 @@ export const api = {
   listSessions: () => handle<Session[]>(fetch('/api/sessions', { headers: adminHeaders() })),
 
   createSession: (
-    opts: { name: string; sizes: string; groupSize: number; files: File[] },
+    opts: { name: string; sizes: string; groupSize: number; storeId: string; files: File[] },
     onProgress?: (pct: number) => void
   ) => uploadWithProgress('/api/sessions', { ...opts, onProgress }),
+
+  listStores: () => handle<Store[]>(fetch('/api/stores', { headers: adminHeaders() })),
+
+  push: (sessionId: string, mode: 'entry' | 'absolute') =>
+    handle<PushResult>(fetch(`/api/sessions/${sessionId}/push`, { method: 'POST', ...json({ mode }) })),
 
   addPhotos: (sessionId: string, files: File[], onProgress?: (pct: number) => void) =>
     uploadWithProgress(`/api/sessions/${sessionId}/photos`, { files, onProgress }),
@@ -111,13 +131,21 @@ export const api = {
 // XHR para poder mostrar progreso real al subir 100+ fotos.
 function uploadWithProgress(
   url: string,
-  opts: { name?: string; sizes?: string; groupSize?: number; files: File[]; onProgress?: (pct: number) => void }
+  opts: {
+    name?: string;
+    sizes?: string;
+    groupSize?: number;
+    storeId?: string;
+    files: File[];
+    onProgress?: (pct: number) => void;
+  }
 ): Promise<Session> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     if (opts.name !== undefined) form.append('name', opts.name);
     if (opts.sizes !== undefined) form.append('sizes', opts.sizes);
     if (opts.groupSize !== undefined) form.append('groupSize', String(opts.groupSize));
+    if (opts.storeId !== undefined) form.append('storeId', opts.storeId);
     opts.files.forEach((f) => form.append('photos', f));
 
     const xhr = new XMLHttpRequest();

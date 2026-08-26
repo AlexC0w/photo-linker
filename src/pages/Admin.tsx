@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, clearPin, getPin, setPin, type Session } from '../lib/api';
+import { api, clearPin, getPin, setPin, type PushResult, type Session, type Store } from '../lib/api';
 import { Button, Card, Input, Progress } from '../components/ui';
 
 export default function Admin() {
@@ -66,14 +66,22 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
   const [name, setName] = useState('');
   const [sizes, setSizes] = useState('');
   const [groupSize, setGroupSize] = useState('4');
+  const [storeId, setStoreId] = useState('');
+  const [stores, setStores] = useState<Store[]>([]);
   const [files, setFiles] = useState<File[]>([]);
+  const [pushing, setPushing] = useState('');
+  const [asking, setAsking] = useState('');
+  const [pushResult, setPushResult] = useState<(PushResult & { sessionId: string }) | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = () => api.listSessions().then(setSessions).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.listStores().then(setStores).catch(() => setStores([]));
+  }, []);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -83,7 +91,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     setProgress(0);
     try {
       await api.createSession(
-        { name: name.trim(), sizes, groupSize: Number.parseInt(groupSize, 10) || 1, files },
+        { name: name.trim(), sizes, groupSize: Number.parseInt(groupSize, 10) || 1, storeId, files },
         setProgress
       );
       setName('');
@@ -101,6 +109,22 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     if (!confirm(`¿Eliminar la sesión "${s.name}" con sus ${s.total} artículos y sus fotos? No se puede deshacer.`)) return;
     await api.deleteSession(s.id);
     load();
+  }
+
+  async function sendToVently(s: Session, mode: 'entry' | 'absolute') {
+    setPushing(s.id);
+    setPushResult(null);
+    setAsking('');
+    setError('');
+    try {
+      const result = await api.push(s.id, mode);
+      setPushResult({ ...result, sessionId: s.id });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPushing('');
+    }
   }
 
   async function copyLink(s: Session) {
@@ -130,6 +154,21 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+          {stores.length > 0 && (
+            <div>
+              <label className="mb-1 block text-sm font-medium">Tienda de Vently</label>
+              <select
+                value={storeId}
+                onChange={(e) => setStoreId(e.target.value)}
+                className="h-12 w-full rounded-xl border border-slate-300 bg-white px-4"
+              >
+                <option value="">Sin enviar a Vently (solo Excel)</option>
+                {stores.map((st) => (
+                  <option key={st.id} value={st.id}>{st.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-sm font-medium">Corrida de tallas</label>
@@ -195,15 +234,56 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                     day: 'numeric', month: 'long', year: 'numeric',
                   })}
                   {s.sizes.length > 0 && ` · tallas ${s.sizes.join(', ')}`}
+                  {s.storeName && ` · ${s.storeName}`}
                 </p>
               </div>
               <div className="text-right">
                 <p className="text-lg font-semibold">{s.completed} / {s.total}</p>
-                <p className="text-sm text-slate-500">artículos · {s.percent}%</p>
+                <p className="text-sm text-slate-500">
+                  artículos · {s.percent}%
+                  {s.storeId && ` · ${s.sent} en Vently`}
+                </p>
               </div>
             </div>
 
             <div className="my-4"><Progress percent={s.percent} /></div>
+
+            {asking === s.id && (
+              <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-medium">¿Qué es el stock capturado?</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Se enviarán solo los artículos completados que no se hayan enviado antes.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button onClick={() => sendToVently(s, 'entry')}>
+                    Mercancía que entra (suma al stock)
+                  </Button>
+                  <Button variant="secondary" onClick={() => sendToVently(s, 'absolute')}>
+                    Conteo (reemplaza el stock)
+                  </Button>
+                  <Button variant="ghost" onClick={() => setAsking('')}>Cancelar</Button>
+                </div>
+              </div>
+            )}
+
+            {pushResult?.sessionId === s.id && (
+              <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                <p className="font-medium">
+                  {pushResult.enviados} enviados a {pushResult.tienda}
+                  {pushResult.errores > 0 && ` · ${pushResult.errores} con error`}
+                  {pushResult.omitidos > 0 && ` · ${pushResult.omitidos} omitidos`}
+                </p>
+                {pushResult.detalles.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-slate-600">
+                    {pushResult.detalles.map((d, i) => (
+                      <li key={i} className={d.error ? 'text-red-600' : ''}>
+                        Artículo {d.articulo}: {d.error || d.aviso}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-2">
               <Link to={`/session/${s.id}`}><Button variant="secondary">Abrir captura</Button></Link>
@@ -213,6 +293,15 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                 {copied === s.id ? '¡Enlace copiado!' : 'Copiar enlace'}
               </Button>
               <a href={api.exportUrl(s.id)}><Button variant="secondary">Descargar Excel</Button></a>
+              {s.storeId && (
+                <Button
+                  variant="secondary"
+                  disabled={pushing === s.id}
+                  onClick={() => setAsking(asking === s.id ? '' : s.id)}
+                >
+                  {pushing === s.id ? 'Enviando…' : `Enviar a ${s.storeName || 'Vently'}`}
+                </Button>
+              )}
               <Button variant="danger" onClick={() => remove(s)}>Eliminar</Button>
             </div>
           </Card>

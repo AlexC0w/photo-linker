@@ -6,6 +6,7 @@ import ExcelJS from 'exceljs';
 import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { db, DATA_DIR, UPLOAD_DIR, THUMB_DIR } from './db.js';
+import { findStore, publicStores, pushArticle } from './vently.js';
 
 const PORT = process.env.PORT || 3000;
 const ADMIN_PIN = process.env.ADMIN_PIN || '1234';
@@ -91,9 +92,14 @@ const parseSizes = (raw) =>
 
 function withStats(session) {
   const { total, completed } = q.stats.get({ id: session.id });
+  const sent = db
+    .prepare("SELECT COUNT(*) AS n FROM articles WHERE sessionId = ? AND ventlyStatus = 'enviado'")
+    .get(session.id).n;
   return {
     ...session,
     sizes: parseSizes(session.sizeRun),
+    storeName: findStore(session.storeId)?.name || '',
+    sent,
     total,
     completed,
     pending: total - completed,
@@ -109,6 +115,8 @@ function loadArticle(row) {
     id: row.id,
     order: row.order,
     barcode: row.barcode,
+    ventlyStatus: row.ventlyStatus,
+    ventlyMessage: row.ventlyMessage,
     photos,
     coverId: cover?.id ?? null,
     coverUrl: cover?.imageUrl ?? '',
@@ -166,18 +174,15 @@ app.post('/api/sessions', requireAdmin, upload.array('photos'), async (req, res)
 
   const sizeRun = parseSizes(req.body.sizes).join(',');
   const groupSize = Math.max(1, Number.parseInt(req.body.groupSize, 10) || 1);
+  const storeId = String(req.body.storeId || '').trim();
   const id = nanoid(10);
   const now = new Date().toISOString();
   const prepared = await prepareFiles(sortFiles(req.files));
 
   db.transaction(() => {
-    db.prepare('INSERT INTO sessions (id, name, sizeRun, groupSize, createdAt) VALUES (?, ?, ?, ?, ?)').run(
-      id,
-      name,
-      sizeRun,
-      groupSize,
-      now
-    );
+    db.prepare(
+      'INSERT INTO sessions (id, name, sizeRun, groupSize, storeId, createdAt) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(id, name, sizeRun, groupSize, storeId, now);
     createArticlesFor(id, prepared, groupSize, 0, now);
   })();
 
@@ -253,7 +258,14 @@ app.put('/api/articles/:id/variants', (req, res) => {
   db.transaction(() => {
     db.prepare('DELETE FROM variants WHERE articleId = ?').run(article.id);
     clean.forEach((v, i) => insert.run(nanoid(12), article.id, v.size, v.stock, i, now));
-    db.prepare('UPDATE articles SET barcode = ?, updatedAt = ? WHERE id = ?').run(barcode, now, article.id);
+    // Si ya se había enviado y cambian los datos, vuelve a quedar por enviar.
+    const status = article.ventlyStatus === 'enviado' ? 'reenviar' : article.ventlyStatus;
+    db.prepare('UPDATE articles SET barcode = ?, ventlyStatus = ?, updatedAt = ? WHERE id = ?').run(
+      barcode,
+      status,
+      now,
+      article.id
+    );
   })();
 
   res.json({
@@ -414,6 +426,62 @@ app.post('/api/photos/:id/cover', (req, res) => {
     db.prepare('UPDATE photos SET isCover = 1 WHERE id = ?').run(photo.id);
   })();
   res.json({ article: loadArticle(q.article.get(photo.articleId)) });
+});
+
+/* ---------- vently ---------- */
+app.get('/api/stores', requireAdmin, (req, res) => res.json(publicStores()));
+
+/*
+  Envía a Vently los artículos completados que aún no se han enviado.
+  mode: 'entry' suma el stock como entrada de mercancía; 'absolute' lo fija como stock final.
+*/
+app.post('/api/sessions/:id/push', requireAdmin, async (req, res) => {
+  const session = q.session.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+  const store = findStore(session.storeId);
+  if (!store) return res.status(400).json({ error: 'Esta sesión no tiene una tienda de Vently asignada' });
+
+  const mode = req.body?.mode;
+  if (mode !== 'entry' && mode !== 'absolute') {
+    return res.status(400).json({ error: 'Elige si el stock se suma como entrada o se fija como stock final' });
+  }
+
+  const articles = q.articles.all(session.id).map(loadArticle);
+  // Solo los completados y no enviados: reenviar duplicaría entradas de stock.
+  const target = articles.filter((a) => a.completed && a.ventlyStatus !== 'enviado');
+  const update = db.prepare(
+    'UPDATE articles SET ventlyStatus = ?, ventlyMessage = ?, ventlyProductId = ?, ventlySentAt = ? WHERE id = ?'
+  );
+
+  const detalles = [];
+  let enviados = 0;
+  let errores = 0;
+
+  for (const article of target) {
+    try {
+      const { productId, notes } = await pushArticle(store, article, {
+        mode,
+        sessionName: session.name,
+        uploadDir: UPLOAD_DIR,
+      });
+      update.run('enviado', notes.join('; '), String(productId), new Date().toISOString(), article.id);
+      enviados++;
+      if (notes.length) detalles.push({ articulo: article.order + 1, aviso: notes.join('; ') });
+    } catch (err) {
+      update.run('error', err.message.slice(0, 500), '', '', article.id);
+      errores++;
+      detalles.push({ articulo: article.order + 1, error: err.message });
+    }
+  }
+
+  res.json({
+    tienda: store.name || store.id,
+    enviados,
+    errores,
+    omitidos: articles.length - target.length,
+    detalles,
+  });
 });
 
 /* ---------- excel ---------- */
