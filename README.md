@@ -126,9 +126,14 @@ Lee EAN-13, EAN-8, UPC-A, UPC-E, Code 128, Code 39 e ITF. Al leer, vibra, cierra
 las tallas y deja el cursor en el primer stock. La barra de arriba muestra qué motor está activo y
 cuántos cuadros lleva analizados, para saber si el lector está trabajando o atorado.
 
-Si el video en vivo no engancha el código, el botón **tomar foto del código** usa la cámara nativa
-del teléfono (con su enfoque y resolución completa) y decodifica esa imagen. Es el camino más
-confiable en teléfonos lentos.
+Cada cuadro se analiza de tres formas alternadas —la banda del marco, esa banda girada 90° y el
+cuadro completo—, con ZXing también invertido. **Nunca se reduce la imagen**: medido con códigos
+sintéticos del 5% al 20% del ancho del encuadre, a resolución nativa se leen todos, y reescalados
+hacia abajo (a 1024 px) fallan todos. Esa reducción era justo lo que impedía leer.
+
+Si el video en vivo no engancha, el botón **tomar foto del código** usa la cámara nativa del
+teléfono (con su enfoque y resolución completa) y decodifica esa imagen. Hay además botón de
+**linterna** cuando el equipo la expone.
 
 Ojo con ZXing: cualquiera de sus `decodeFrom*` llama a `reset()`, que apaga el stream y limpia el
 `srcObject`. Por eso ZXing abre la cámara él mismo con `decodeFromConstraints` y no se le pasa un
